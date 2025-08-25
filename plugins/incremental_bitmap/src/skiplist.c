@@ -66,7 +66,7 @@ void skiplist_destroy(skiplist_t* sl) {
     free(sl);
 }
 
-void skiplist_insert(skiplist_t* sl, int64_t key, void* value) {
+void skiplist_insert(skiplist_t* sl, uint64_t key, void* value) {
     pthread_rwlock_wrlock(&sl->rwlock);
     skiplist_node_t* update[SKIPLIST_MAX_LEVEL];
     skiplist_node_t* x = sl->header;
@@ -106,7 +106,7 @@ void skiplist_insert(skiplist_t* sl, int64_t key, void* value) {
     pthread_rwlock_unlock(&sl->rwlock);
 }
 
-void* skiplist_find(skiplist_t* sl, int64_t key) {
+void* skiplist_find(skiplist_t* sl, uint64_t key) {
     pthread_rwlock_rdlock(&sl->rwlock);
     skiplist_node_t* x = sl->header;
     for (int i = sl->level - 1; i >= 0; i--) {
@@ -123,7 +123,7 @@ void* skiplist_find(skiplist_t* sl, int64_t key) {
     return result;
 }
 
-void skiplist_remove(skiplist_t* sl, int64_t key) {
+void skiplist_remove(skiplist_t* sl, uint64_t key) {
     pthread_rwlock_wrlock(&sl->rwlock);
     skiplist_node_t* update[SKIPLIST_MAX_LEVEL];
     skiplist_node_t* x = sl->header;
@@ -151,7 +151,7 @@ void skiplist_remove(skiplist_t* sl, int64_t key) {
     pthread_rwlock_unlock(&sl->rwlock);
 }
 
-void skiplist_range_query(skiplist_t* sl, int64_t start, int64_t end, bool reverse, skiplist_range_cb cb, void* user_data) {
+void skiplist_range_query(skiplist_t* sl, uint64_t start, uint64_t end, bool reverse, skiplist_range_cb cb, void* user_data) {
     pthread_rwlock_rdlock(&sl->rwlock);
     if (!reverse) {
         skiplist_node_t* x = sl->header;

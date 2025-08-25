@@ -1,18 +1,4 @@
 #include <unistd.h>
-/*
- * Copyright (c) 2024 TAOS Data, Inc. <jhtao@taosdata.com>
- *
- * This program is free software: you can use, redistribute, and/or modify
- * it under the terms of the GNU Affero General Public License, version 3
- * or later ("AGPL"), as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
 
 #include "../include/event_interceptor.h"
 #include "../include/bitmap_engine.h"
@@ -152,11 +138,18 @@ static void test_bitmap_engine_integration() {
     SEventInterceptor* interceptor = event_interceptor_init(&config, bitmap_engine);
     assert(interceptor != NULL);
     
+    // 启动事件拦截器
+    int32_t result = event_interceptor_start(interceptor);
+    assert(result == 0);
+    
     int64_t timestamp = get_current_timestamp();
     
     // 发送事件并验证位图引擎状态
     event_interceptor_on_block_create(interceptor, 2001, 1000, timestamp);
     event_interceptor_on_block_update(interceptor, 2002, 2000, timestamp + 1000);
+    
+    // 等待事件处理完成
+    usleep(100000); // 100ms
     
     // 验证位图引擎统计信息
     uint64_t total_blocks, dirty_count, new_count, deleted_count;
@@ -336,6 +329,10 @@ static void test_performance() {
     SEventInterceptor* interceptor = event_interceptor_init(&config, bitmap_engine);
     assert(interceptor != NULL);
     
+    // 启动事件拦截器
+    int32_t result = event_interceptor_start(interceptor);
+    assert(result == 0);
+    
     int64_t start_time = get_current_timestamp();
     
     // 批量发送事件
@@ -346,6 +343,9 @@ static void test_performance() {
     
     int64_t end_time = get_current_timestamp();
     double duration_ms = (end_time - start_time) / 1000000.0;
+    
+    // 等待事件处理完成
+    usleep(100000); // 100ms
     
     // 验证结果
     uint64_t total_blocks, dirty_count, new_count, deleted_count;

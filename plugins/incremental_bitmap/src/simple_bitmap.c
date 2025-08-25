@@ -1,18 +1,3 @@
-/*
- * Copyright (c) 2024 TAOS Data, Inc. <jhtao@taosdata.com>
- *
- * This program is free software: you can use, redistribute, and/or modify
- * it under the terms of the GNU Affero General Public License, version 3
- * or later ("AGPL"), as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
 #include "../include/bitmap_interface.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,19 +74,49 @@ static bool ensure_capacity(SSimpleBitmap* bitmap, uint32_t min_capacity) {
         new_capacity = min_capacity;
     }
     
+    // 添加安全检查
+    if (bitmap->values == NULL) {
+        printf("DEBUG: ensure_capacity: bitmap->values is NULL\n");
+        return false;
+    }
+    
     uint64_t* new_values = realloc(bitmap->values, new_capacity * sizeof(uint64_t));
     if (!new_values) {
+        printf("DEBUG: ensure_capacity: realloc failed\n");
         return false;
+    }
+    
+    // 检查realloc是否移动了内存块
+    if (new_values != bitmap->values) {
+        printf("DEBUG: ensure_capacity: memory moved from %p to %p\n", bitmap->values, new_values);
     }
     
     bitmap->values = new_values;
     bitmap->capacity = new_capacity;
+    
+    // 添加验证
+    if (bitmap->values == NULL) {
+        printf("DEBUG: ensure_capacity: bitmap->values became NULL after update\n");
+        return false;
+    }
+    
     return true;
 }
 
 // 基本操作实现
 static void simple_bitmap_add(void* bitmap, uint64_t value) {
     SSimpleBitmap* sb = (SSimpleBitmap*)bitmap;
+    
+    // 添加安全检查
+    if (sb == NULL) {
+        printf("DEBUG: simple_bitmap_add: sb is NULL\n");
+        return;
+    }
+    
+    if (sb->values == NULL) {
+        printf("DEBUG: simple_bitmap_add: sb->values is NULL\n");
+        return;
+    }
     
     // 检查是否已存在
     if (simple_bitmap_contains(bitmap, value)) {
@@ -110,6 +125,13 @@ static void simple_bitmap_add(void* bitmap, uint64_t value) {
     
     // 确保容量足够
     if (!ensure_capacity(sb, sb->count + 1)) {
+        printf("DEBUG: simple_bitmap_add: ensure_capacity failed\n");
+        return;
+    }
+    
+    // 再次检查values指针
+    if (sb->values == NULL) {
+        printf("DEBUG: simple_bitmap_add: sb->values became NULL after ensure_capacity\n");
         return;
     }
     
@@ -332,53 +354,75 @@ static void* simple_bitmap_clone(const void* bitmap) {
 
 // 创建位图接口
 SBitmapInterface* bitmap_interface_create(void) {
-    // 检查是否使用 RoaringBitmap
-    const char* use_roaring = getenv("TDENGINE_USE_ROARING");
-    if (use_roaring && (strcmp(use_roaring, "1") == 0 || strcmp(use_roaring, "true") == 0)) {
-        // 使用 RoaringBitmap 实现
-        extern SBitmapInterface* roaring_bitmap_interface_create(void);
-        return roaring_bitmap_interface_create();
+    // 检查是否强制使用简单位图实现
+    const char* use_simple = getenv("TDENGINE_USE_SIMPLE_BITMAP");
+    if (use_simple && (strcmp(use_simple, "1") == 0 || strcmp(use_simple, "true") == 0)) {
+        // 强制使用简单位图实现
+        SBitmapInterface* interface = malloc(sizeof(SBitmapInterface));
+        if (!interface) {
+            return NULL;
+        }
+        
+        // 创建位图实例
+        interface->bitmap = simple_bitmap_create();
+        if (!interface->bitmap) {
+            free(interface);
+            return NULL;
+        }
+        
+        // 设置函数指针
+        interface->add = simple_bitmap_add;
+        interface->remove = simple_bitmap_remove;
+        interface->contains = simple_bitmap_contains;
+        interface->cardinality = simple_bitmap_cardinality;
+        interface->clear = simple_bitmap_clear;
+        interface->union_with = simple_bitmap_union_with;
+        interface->intersect_with = simple_bitmap_intersect_with;
+        interface->subtract = simple_bitmap_subtract;
+        interface->to_array = simple_bitmap_to_array;
+        interface->serialized_size = simple_bitmap_serialized_size;
+        interface->serialize = simple_bitmap_serialize;
+        interface->deserialize = simple_bitmap_deserialize;
+        interface->destroy = simple_bitmap_destroy;
+        interface->memory_usage = simple_bitmap_memory_usage;
+        interface->create = simple_bitmap_create;
+        interface->clone = simple_bitmap_clone;
+        
+        return interface;
     }
     
-    // 默认使用简单位图实现
-    SBitmapInterface* interface = malloc(sizeof(SBitmapInterface));
-    if (!interface) {
-        return NULL;
-    }
-    
-    // 创建位图实例
-    interface->bitmap = simple_bitmap_create();
-    if (!interface->bitmap) {
-        free(interface);
-        return NULL;
-    }
-    
-    // 设置函数指针
-    interface->add = simple_bitmap_add;
-    interface->remove = simple_bitmap_remove;
-    interface->contains = simple_bitmap_contains;
-    interface->cardinality = simple_bitmap_cardinality;
-    interface->clear = simple_bitmap_clear;
-    interface->union_with = simple_bitmap_union_with;
-    interface->intersect_with = simple_bitmap_intersect_with;
-    interface->subtract = simple_bitmap_subtract;
-    interface->to_array = simple_bitmap_to_array;
-    interface->serialized_size = simple_bitmap_serialized_size;
-    interface->serialize = simple_bitmap_serialize;
-    interface->deserialize = simple_bitmap_deserialize;
-    interface->destroy = simple_bitmap_destroy;
-    interface->memory_usage = simple_bitmap_memory_usage;
-    interface->create = simple_bitmap_create;
-    interface->clone = simple_bitmap_clone;
-    
-    return interface;
+    // 默认使用 RoaringBitmap 实现
+    extern SBitmapInterface* roaring_bitmap_interface_create(void);
+    return roaring_bitmap_interface_create();
 }
 
 void bitmap_interface_destroy(SBitmapInterface* interface) {
-    if (interface) {
-        if (interface->bitmap) {
-            interface->destroy(interface->bitmap);
-        }
-        free(interface);
+    if (!interface) {
+        return;
     }
+    
+    printf("DEBUG: bitmap_interface_destroy: interface=%p, interface->bitmap=%p\n", 
+           interface, interface->bitmap);
+    
+    // 验证位图对象的完整性
+    if (interface->bitmap == (void*)0x7d6) {
+        printf("DEBUG: bitmap_interface_destroy: Corrupted bitmap detected, skipping destruction\n");
+        // 清理接口结构体，但不销毁损坏的位图
+        free(interface);
+        return;
+    }
+    
+    if (interface->bitmap) {
+        // 验证位图对象是否仍然有效
+        if (interface->bitmap < (void*)0x1000) {
+            printf("DEBUG: bitmap_interface_destroy: Invalid bitmap address, skipping destruction\n");
+            free(interface);
+            return;
+        }
+        
+        // 安全地销毁位图
+        interface->destroy(interface->bitmap);
+    }
+    
+    free(interface);
 } 

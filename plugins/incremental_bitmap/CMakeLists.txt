@@ -19,7 +19,7 @@ include_directories(
 # 设置库目录
 link_directories(
     ${TDENGINE_BUILD_DIR}/lib
-    ${TDENGINE_BUILD_DIR}/source/connector/c
+    ${TDENGINE_BUILD_DIR}/build/lib
 )
 
 # 源文件
@@ -31,6 +31,8 @@ set(SOURCES
     src/simple_bitmap.c
     src/roaring_bitmap.c
     src/ring_buffer.c
+    src/storage_engine_interface.c
+    src/mock_storage_engine.c
 )
 
 # 创建动态库
@@ -60,16 +62,17 @@ if(BUILD_TESTING)
     add_executable(test_ring_buffer test/test_ring_buffer.c src/ring_buffer.c)
     target_link_libraries(test_ring_buffer pthread)
     
-    # 位图引擎测试
-    add_executable(test_bitmap_engine 
-        test/test_bitmap_engine.c 
-        src/bitmap_engine.c
-        src/ring_buffer.c
-        src/skiplist.c
-        src/simple_bitmap.c
-        src/roaring_bitmap.c
-    )
-    target_link_libraries(test_bitmap_engine pthread roaring)
+    # 位图引擎核心功能测试
+    add_executable(test_bitmap_engine_core test/test_bitmap_engine_core.c src/bitmap_engine.c src/skiplist.c src/simple_bitmap.c src/roaring_bitmap.c)
+    target_link_libraries(test_bitmap_engine_core pthread roaring)
+    
+    # 抽象层接口测试
+    add_executable(test_abstraction_layer test/test_abstraction_layer.c src/simple_bitmap.c src/roaring_bitmap.c)
+    target_link_libraries(test_abstraction_layer pthread roaring)
+    
+    # RoaringBitmap专用测试
+    add_executable(test_roaring_bitmap_specific test/test_roaring_bitmap_specific.c src/simple_bitmap.c src/roaring_bitmap.c)
+    target_link_libraries(test_roaring_bitmap_specific pthread roaring)
     
     # 事件拦截器测试
     add_executable(test_event_interceptor 
@@ -106,14 +109,6 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_state_transitions pthread roaring)
     
-    # 抽象层测试
-    add_executable(test_abstraction_layer 
-        test/test_abstraction_layer.c 
-        src/simple_bitmap.c
-        src/roaring_bitmap.c
-    )
-    target_link_libraries(test_abstraction_layer pthread roaring)
-    
     # 跳表测试
     add_executable(test_skiplist 
         test/test_skiplist.c 
@@ -134,17 +129,8 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_retry_mechanism pthread roaring)
     
-    # RoaringBitmap 测试
-    add_executable(test_roaring_bitmap 
-        test/test_roaring_bitmap.c 
-        src/simple_bitmap.c
-        src/roaring_bitmap.c
-    )
-    target_link_libraries(test_roaring_bitmap pthread roaring)
-    
     # 设置测试输出目录
-    set_target_properties(test_ring_buffer test_bitmap_engine test_event_interceptor 
-                         test_backup_coordinator test_state_transitions test_abstraction_layer test_skiplist test_retry_mechanism test_roaring_bitmap
+    set_target_properties(test_ring_buffer test_bitmap_engine_core test_abstraction_layer test_roaring_bitmap_specific test_event_interceptor test_backup_coordinator test_state_transitions test_skiplist test_retry_mechanism
         PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/build
     )

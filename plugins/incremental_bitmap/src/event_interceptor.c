@@ -1,20 +1,7 @@
-/*
- * Copyright (c) 2024 TAOS Data, Inc. <jhtao@taosdata.com>
- *
- * This program is free software: you can use, redistribute, and/or modify
- * it under the terms of the GNU Affero General Public License, version 3
- * or later ("AGPL"), as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
 #include "event_interceptor.h"
+#include "storage_engine_interface.h"
 #include "ring_buffer.h"
+#include "bitmap_engine.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -47,6 +34,25 @@ static void* callback_thread_func(void* arg) {
         
         if (result == 0) {
             SBlockEvent* event = (SBlockEvent*)event_ptr;
+            
+            // 更新位图引擎
+            switch (event->event_type) {
+                case EVENT_BLOCK_CREATE:
+                    bitmap_engine_mark_new(interceptor->bitmap_engine, event->block_id, event->wal_offset, event->timestamp);
+                    break;
+                case EVENT_BLOCK_UPDATE:
+                    bitmap_engine_mark_dirty(interceptor->bitmap_engine, event->block_id, event->wal_offset, event->timestamp);
+                    break;
+                case EVENT_BLOCK_FLUSH:
+                    bitmap_engine_clear_block(interceptor->bitmap_engine, event->block_id);
+                    break;
+                case EVENT_BLOCK_DELETE:
+                    bitmap_engine_mark_deleted(interceptor->bitmap_engine, event->block_id, event->wal_offset, event->timestamp);
+                    break;
+                default:
+                    break;
+            }
+            
             // 处理事件
             if (interceptor->config.callback) {
                 interceptor->config.callback(event, interceptor->config.callback_user_data);
@@ -84,6 +90,7 @@ SEventInterceptor* event_interceptor_init(const SEventInterceptorConfig* config,
     interceptor->stop_threads = false;
     interceptor->events_processed = 0;
     interceptor->events_dropped = 0;
+    interceptor->storage_interface = NULL;
     
     // 初始化事件缓冲区（环形队列）
     interceptor->event_buffer = ring_buffer_init(interceptor->buffer_size);
@@ -117,6 +124,11 @@ SEventInterceptor* event_interceptor_init(const SEventInterceptorConfig* config,
         return NULL;
     }
     
+    // 初始化线程ID为0
+    for (uint32_t i = 0; i < interceptor->thread_count; i++) {
+        interceptor->callback_threads[i] = 0;
+    }
+    
     return interceptor;
 }
 
@@ -125,8 +137,16 @@ void event_interceptor_destroy(SEventInterceptor* interceptor) {
         return;
     }
     
-    // 停止所有线程
-    event_interceptor_stop(interceptor);
+    // 停止所有线程（如果正在运行）
+    if (!interceptor->stop_threads) {
+        event_interceptor_stop(interceptor);
+    }
+    
+    // 销毁存储引擎接口
+    if (interceptor->storage_interface) {
+        interceptor->storage_interface->destroy();
+        interceptor->storage_interface = NULL;
+    }
     
     // 销毁环形队列
     if (interceptor->event_buffer) {
@@ -186,7 +206,7 @@ int32_t event_interceptor_stop(SEventInterceptor* interceptor) {
     
     pthread_mutex_lock(&interceptor->mutex);
     
-    if (!interceptor->stop_threads) {
+    if (interceptor->stop_threads) {
         // 已经停止
         pthread_mutex_unlock(&interceptor->mutex);
         return 0;
@@ -194,9 +214,11 @@ int32_t event_interceptor_stop(SEventInterceptor* interceptor) {
     
     interceptor->stop_threads = true;
     
-    // 等待所有线程结束
+    // 等待所有线程结束（只有在线程已经创建的情况下）
     for (uint32_t i = 0; i < interceptor->thread_count; i++) {
-        pthread_join(interceptor->callback_threads[i], NULL);
+        if (interceptor->callback_threads[i] != 0) {
+            pthread_join(interceptor->callback_threads[i], NULL);
+        }
     }
     
     pthread_mutex_unlock(&interceptor->mutex);
@@ -333,70 +355,52 @@ void event_interceptor_get_stats(SEventInterceptor* interceptor,
     pthread_mutex_unlock(&interceptor->mutex);
 }
 
-// 存储引擎接口拦截实现
-// 注意：这里需要根据实际的TDengine API进行调整
-
-// 原始函数指针
-static int (*original_taos_write_block)(void* taos, int rows, char* pData, const char* tbname) = NULL;
-static int (*original_taos_write_block_with_reqid)(void* taos, int rows, char* pData, 
-                                                  const char* tbname, int64_t reqid) = NULL;
-
-// 拦截的taosWriteBlock函数
-int taos_write_block_intercepted(void* taos, int rows, char* pData, const char* tbname) {
-    // 调用原始函数
-    int result = original_taos_write_block(taos, rows, pData, tbname);
-    
-    // 如果成功，记录事件
-    if (result == 0) {
-        // 这里需要根据实际的TDengine实现来获取块ID和WAL偏移量
-        // 简化实现，实际需要从taos连接或数据中提取
-        uint64_t block_id = 0; // TODO: 从数据中提取块ID
-        uint64_t wal_offset = 0; // TODO: 从WAL中获取偏移量
-        int64_t timestamp = get_current_timestamp();
-        
-        // 通知事件拦截器（需要全局拦截器实例）
-        // TODO: 实现全局拦截器访问机制
+// 存储引擎接口管理
+int32_t event_interceptor_set_storage_interface(SEventInterceptor* interceptor,
+                                               SStorageEngineInterface* interface) {
+    if (!interceptor || !interface) {
+        return -1;
     }
     
-    return result;
-}
-
-// 拦截的taosWriteBlockWithReqid函数
-int taos_write_block_with_reqid_intercepted(void* taos, int rows, char* pData, 
-                                           const char* tbname, int64_t reqid) {
-    // 调用原始函数
-    int result = original_taos_write_block_with_reqid(taos, rows, pData, tbname, reqid);
-    
-    // 如果成功，记录事件
-    if (result == 0) {
-        // 这里需要根据实际的TDengine实现来获取块ID和WAL偏移量
-        uint64_t block_id = 0; // TODO: 从数据中提取块ID
-        uint64_t wal_offset = 0; // TODO: 从WAL中获取偏移量
-        int64_t timestamp = get_current_timestamp();
-        
-        // 通知事件拦截器（需要全局拦截器实例）
-        // TODO: 实现全局拦截器访问机制
+    // 如果已有接口，先销毁
+    if (interceptor->storage_interface) {
+        interceptor->storage_interface->destroy();
     }
     
-    return result;
-}
-
-int32_t install_storage_engine_interception(SEventInterceptor* interceptor) {
-    // 这里需要实现动态库函数替换
-    // 可以使用dlsym和函数指针替换的方式
-    // 或者使用LD_PRELOAD的方式
-    
-    // 简化实现，实际需要：
-    // 1. 获取原始函数地址
-    // 2. 替换函数指针
-    // 3. 设置全局拦截器实例
-    
-    // TODO: 实现完整的函数拦截机制
+    interceptor->storage_interface = interface;
     return 0;
 }
 
-int32_t uninstall_storage_engine_interception(SEventInterceptor* interceptor) {
-    // 恢复原始函数指针
-    // TODO: 实现完整的函数恢复机制
-    return 0;
+int32_t event_interceptor_install_storage_interception(SEventInterceptor* interceptor) {
+    if (!interceptor || !interceptor->storage_interface) {
+        return -1;
+    }
+    
+    return interceptor->storage_interface->install_interception();
+}
+
+int32_t event_interceptor_uninstall_storage_interception(SEventInterceptor* interceptor) {
+    if (!interceptor || !interceptor->storage_interface) {
+        return -1;
+    }
+    
+    return interceptor->storage_interface->uninstall_interception();
+}
+
+// 测试用的手动事件触发
+int32_t event_interceptor_trigger_test_event(SEventInterceptor* interceptor,
+                                            EBlockEventType event_type,
+                                            uint64_t block_id, uint64_t wal_offset, int64_t timestamp) {
+    switch (event_type) {
+        case EVENT_BLOCK_CREATE:
+            return event_interceptor_on_block_create(interceptor, block_id, wal_offset, timestamp);
+        case EVENT_BLOCK_UPDATE:
+            return event_interceptor_on_block_update(interceptor, block_id, wal_offset, timestamp);
+        case EVENT_BLOCK_FLUSH:
+            return event_interceptor_on_block_flush(interceptor, block_id, wal_offset, timestamp);
+        case EVENT_BLOCK_DELETE:
+            return event_interceptor_on_block_delete(interceptor, block_id, wal_offset, timestamp);
+        default:
+            return -1;
+    }
 } 

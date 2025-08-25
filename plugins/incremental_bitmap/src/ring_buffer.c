@@ -18,6 +18,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <stdio.h> // Added for printf
 
 SRingBuffer* ring_buffer_init(uint32_t capacity) {
     if (capacity == 0) {
@@ -112,7 +113,7 @@ int32_t ring_buffer_enqueue_blocking(SRingBuffer* ring_buffer, void* item, uint3
     }
     
     pthread_mutex_lock(&ring_buffer->mutex);
-    
+    int success = 0;
     // 等待队列有空间
     while (ring_buffer->size >= ring_buffer->capacity) {
         if (timeout_ms == 0) {
@@ -125,7 +126,6 @@ int32_t ring_buffer_enqueue_blocking(SRingBuffer* ring_buffer, void* item, uint3
             ts.tv_nsec += (timeout_ms % 1000) * 1000000;
             ts.tv_sec += timeout_ms / 1000 + ts.tv_nsec / 1000000000;
             ts.tv_nsec %= 1000000000;
-            
             int ret = pthread_cond_timedwait(&ring_buffer->not_full, &ring_buffer->mutex, &ts);
             if (ret == ETIMEDOUT) {
                 ring_buffer->overflow_count++;
@@ -134,15 +134,13 @@ int32_t ring_buffer_enqueue_blocking(SRingBuffer* ring_buffer, void* item, uint3
             }
         }
     }
-    
+    // 只有在有空间时才写入 item
     ring_buffer->buffer[ring_buffer->tail] = item;
     ring_buffer->tail = (ring_buffer->tail + 1) % ring_buffer->capacity;
     ring_buffer->size++;
     ring_buffer->enqueue_count++;
-    
     // 通知等待的消费者
     pthread_cond_signal(&ring_buffer->not_empty);
-    
     pthread_mutex_unlock(&ring_buffer->mutex);
     return 0;
 }
@@ -160,6 +158,7 @@ int32_t ring_buffer_dequeue(SRingBuffer* ring_buffer, void** item) {
     }
     
     *item = ring_buffer->buffer[ring_buffer->head];
+    ring_buffer->buffer[ring_buffer->head] = NULL;
     ring_buffer->head = (ring_buffer->head + 1) % ring_buffer->capacity;
     ring_buffer->size--;
     ring_buffer->dequeue_count++;
@@ -200,6 +199,7 @@ int32_t ring_buffer_dequeue_blocking(SRingBuffer* ring_buffer, void** item, uint
     }
     
     *item = ring_buffer->buffer[ring_buffer->head];
+    ring_buffer->buffer[ring_buffer->head] = NULL;
     ring_buffer->head = (ring_buffer->head + 1) % ring_buffer->capacity;
     ring_buffer->size--;
     ring_buffer->dequeue_count++;
@@ -240,7 +240,10 @@ void ring_buffer_clear(SRingBuffer* ring_buffer, void (*free_func)(void*)) {
         uint32_t i = ring_buffer->head;
         uint32_t count = ring_buffer->size;
         while (count > 0) {
-            free_func(ring_buffer->buffer[i]);
+            if (ring_buffer->buffer[i]) {
+                free_func(ring_buffer->buffer[i]);
+                ring_buffer->buffer[i] = NULL;
+            }
             i = (i + 1) % ring_buffer->capacity;
             count--;
         }

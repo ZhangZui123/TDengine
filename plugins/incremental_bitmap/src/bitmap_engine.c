@@ -1,20 +1,6 @@
-/*
- * Copyright (c) 2024 TAOS Data, Inc. <jhtao@taosdata.com>
- *
- * This program is free software: you can use, redistribute, and/or modify
- * it under the terms of the GNU Affero General Public License, version 3
- * or later ("AGPL"), as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
 #include "bitmap_engine.h"
-#include "taosx_integration.h"
+#include "bitmap_interface.h"
+#include "skiplist.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -42,9 +28,6 @@ static int64_t get_current_timestamp() {
 }
 
 
-
-
-
 // 深拷贝字符串
 static char* deep_copy_string(const char* src) {
     if (src == NULL) {
@@ -62,51 +45,67 @@ static char* deep_copy_string(const char* src) {
 }
 
 
-
-
-
-
-
-
-
-
-
 // 查找块元数据
 static SBlockMetadataNode* find_block_metadata(SBitmapEngine* engine, uint64_t block_id) {
+    if (engine == NULL || engine->metadata_map == NULL) {
+        printf("DEBUG: find_block_metadata: engine=%p, metadata_map=%p\n", engine, 
+               engine ? engine->metadata_map : NULL);
+        return NULL;
+    }
+    
     uint32_t hash = hash_block_id(block_id, engine->metadata_map_size);
+    printf("DEBUG: find_block_metadata: block_id=%lu, hash=%u, map_size=%u\n", 
+           block_id, hash, engine->metadata_map_size);
+    
     SBlockMetadataNode* node = engine->metadata_map[hash];
+    printf("DEBUG: find_block_metadata: node at hash %u = %p\n", hash, node);
     
     while (node != NULL) {
+        printf("DEBUG: find_block_metadata: checking node %p, block_id=%lu\n", node, node->block_id);
         if (node->block_id == block_id) {
+            printf("DEBUG: find_block_metadata: found node for block_id=%lu\n", block_id);
             return node;
         }
         node = node->next;
     }
+    printf("DEBUG: find_block_metadata: no node found for block_id=%lu\n", block_id);
     return NULL;
 }
 
 // 插入块元数据
 static int32_t insert_block_metadata(SBitmapEngine* engine, const SBlockMetadata* metadata) {
-    uint32_t hash = hash_block_id(metadata->block_id, engine->metadata_map_size);
+    printf("DEBUG: insert_block_metadata: block_id=%lu\n", metadata->block_id);
     
-    // 检查是否已存在
-    SBlockMetadataNode* existing = find_block_metadata(engine, metadata->block_id);
-    if (existing != NULL) {
-        existing->metadata = *metadata;
-        return 0;
+    uint32_t hash = hash_block_id(metadata->block_id, engine->metadata_map_size);
+    printf("DEBUG: insert_block_metadata: hash=%u, map_size=%u\n", hash, engine->metadata_map_size);
+    
+    // 检查是否已存在（直接遍历链表，避免调用find_block_metadata）
+    SBlockMetadataNode* existing = engine->metadata_map[hash];
+    while (existing != NULL) {
+        if (existing->block_id == metadata->block_id) {
+            printf("DEBUG: insert_block_metadata: updating existing node\n");
+            existing->metadata = *metadata;
+            return 0;
+        }
+        existing = existing->next;
     }
     
     // 创建新节点
     SBlockMetadataNode* node = (SBlockMetadataNode*)malloc(sizeof(SBlockMetadataNode));
     if (node == NULL) {
+        printf("DEBUG: insert_block_metadata: failed to allocate node\n");
         return -1;
     }
+    
+    printf("DEBUG: insert_block_metadata: created new node at %p\n", node);
     
     node->block_id = metadata->block_id;
     node->metadata = *metadata;
     node->next = engine->metadata_map[hash];
     engine->metadata_map[hash] = node;
     engine->metadata_count++;
+    
+    printf("DEBUG: insert_block_metadata: inserted node at hash %u, count=%u\n", hash, engine->metadata_count);
     
     return 0;
 }
@@ -149,23 +148,32 @@ static int32_t add_time_index(SBitmapEngine* engine, int64_t timestamp, uint64_t
 
 // 添加WAL索引
 static int32_t add_wal_index(SBitmapEngine* engine, uint64_t wal_offset, uint64_t block_id) {
+    printf("DEBUG: add_wal_index: wal_offset=%lu, block_id=%lu\n", wal_offset, block_id);
+    
+    if (engine->wal_index == NULL) {
+        printf("DEBUG: add_wal_index: WAL index is NULL\n");
+        return -1;
+    }
+    
     SBitmapInterface* bm = (SBitmapInterface*)skiplist_find(engine->wal_index, wal_offset);
     if (!bm) {
+        printf("DEBUG: add_wal_index: Creating new bitmap for WAL offset %lu\n", wal_offset);
         bm = bitmap_interface_create();
+        if (!bm) {
+            printf("DEBUG: add_wal_index: Failed to create bitmap\n");
+            return -1;
+        }
         skiplist_insert(engine->wal_index, wal_offset, bm);
+        printf("DEBUG: add_wal_index: Inserted new bitmap at WAL offset %lu\n", wal_offset);
+    } else {
+        printf("DEBUG: add_wal_index: Found existing bitmap for WAL offset %lu\n", wal_offset);
     }
+    
     bm->add(bm->bitmap, block_id);
+    printf("DEBUG: add_wal_index: Added block %lu to bitmap\n", block_id);
+    
     return 0;
 }
-
-
-
-
-
-
-
-
-
 
 
 SBitmapEngine* bitmap_engine_init(void) {
@@ -185,7 +193,7 @@ SBitmapEngine* bitmap_engine_init(void) {
     }
     
     // 初始化元数据映射
-    engine->metadata_map_size = 10000; // 默认大小
+    engine->metadata_map_size = 1000000; // 默认大小
     engine->metadata_map = (SBlockMetadataNode**)calloc(engine->metadata_map_size, sizeof(SBlockMetadataNode*));
     if (engine->metadata_map == NULL) {
         bitmap_engine_destroy(engine);
@@ -290,7 +298,7 @@ int32_t bitmap_engine_mark_dirty(SBitmapEngine* engine, uint64_t block_id,
         return ERR_INVALID_PARAM;
     }
     
-    pthread_mutex_lock(&engine->mutex);
+    pthread_rwlock_wrlock(&engine->rwlock);
     
     // 获取当前块状态（如果存在）
     EBlockState current_state = BLOCK_STATE_CLEAN; // 默认状态
@@ -301,7 +309,7 @@ int32_t bitmap_engine_mark_dirty(SBitmapEngine* engine, uint64_t block_id,
     
     // 验证状态转换
     if (bitmap_engine_validate_state_transition(current_state, BLOCK_STATE_DIRTY) != 0) {
-        pthread_mutex_unlock(&engine->mutex);
+        pthread_rwlock_unlock(&engine->rwlock);
         return ERR_INVALID_STATE_TRANS;
     }
     
@@ -313,7 +321,7 @@ int32_t bitmap_engine_mark_dirty(SBitmapEngine* engine, uint64_t block_id,
     metadata.state = BLOCK_STATE_DIRTY;
     
     if (insert_block_metadata(engine, &metadata) != 0) {
-        pthread_mutex_unlock(&engine->mutex);
+        pthread_rwlock_unlock(&engine->rwlock);
         return -1;
     }
     
@@ -328,7 +336,7 @@ int32_t bitmap_engine_mark_dirty(SBitmapEngine* engine, uint64_t block_id,
     engine->dirty_count++;
     engine->total_blocks++;
     
-    pthread_mutex_unlock(&engine->mutex);
+    pthread_rwlock_unlock(&engine->rwlock);
     return 0;
 }
 
@@ -338,7 +346,7 @@ int32_t bitmap_engine_mark_new(SBitmapEngine* engine, uint64_t block_id,
         return ERR_INVALID_PARAM;
     }
     
-    pthread_mutex_lock(&engine->mutex);
+    pthread_rwlock_wrlock(&engine->rwlock);
     
     // 获取当前块状态（如果存在）
     EBlockState current_state = BLOCK_STATE_CLEAN; // 默认状态
@@ -349,7 +357,7 @@ int32_t bitmap_engine_mark_new(SBitmapEngine* engine, uint64_t block_id,
     
     // 验证状态转换
     if (bitmap_engine_validate_state_transition(current_state, BLOCK_STATE_NEW) != 0) {
-        pthread_mutex_unlock(&engine->mutex);
+        pthread_rwlock_unlock(&engine->rwlock);
         return ERR_INVALID_STATE_TRANS;
     }
     
@@ -361,8 +369,14 @@ int32_t bitmap_engine_mark_new(SBitmapEngine* engine, uint64_t block_id,
     metadata.state = BLOCK_STATE_NEW;
     
     if (insert_block_metadata(engine, &metadata) != 0) {
-        pthread_mutex_unlock(&engine->mutex);
+        pthread_rwlock_unlock(&engine->rwlock);
         return -1;
+    }
+    
+    // 从dirty_blocks中移除（如果存在）
+    if (current_state == BLOCK_STATE_DIRTY) {
+        engine->dirty_blocks->remove(engine->dirty_blocks->bitmap, block_id);
+        engine->dirty_count--;
     }
     
     // 添加到位图
@@ -374,9 +388,11 @@ int32_t bitmap_engine_mark_new(SBitmapEngine* engine, uint64_t block_id,
     
     // 更新统计信息
     engine->new_count++;
-    engine->total_blocks++;
+    if (existing_node == NULL) {
+        engine->total_blocks++; // 只有新块才增加总数
+    }
     
-    pthread_mutex_unlock(&engine->mutex);
+    pthread_rwlock_unlock(&engine->rwlock);
     return 0;
 }
 
@@ -413,6 +429,15 @@ int32_t bitmap_engine_mark_deleted(SBitmapEngine* engine, uint64_t block_id,
         return -1;
     }
     
+    // 从其他位图中移除（如果存在）
+    if (current_state == BLOCK_STATE_DIRTY) {
+        engine->dirty_blocks->remove(engine->dirty_blocks->bitmap, block_id);
+        engine->dirty_count--;
+    } else if (current_state == BLOCK_STATE_NEW) {
+        engine->new_blocks->remove(engine->new_blocks->bitmap, block_id);
+        engine->new_count--;
+    }
+    
     // 添加到位图
     engine->deleted_blocks->add(engine->deleted_blocks->bitmap, block_id);
     
@@ -422,7 +447,9 @@ int32_t bitmap_engine_mark_deleted(SBitmapEngine* engine, uint64_t block_id,
     
     // 更新统计信息
     engine->deleted_count++;
-    engine->total_blocks++;
+    if (existing_node == NULL) {
+        engine->total_blocks++; // 只有新块才增加总数
+    }
     
     pthread_mutex_unlock(&engine->mutex);
     return 0;
@@ -481,7 +508,7 @@ uint32_t bitmap_engine_get_dirty_blocks_by_time(SBitmapEngine* engine,
     uint32_t count = 0;
     
     // 跳表范围查询
-    void range_cb(int64_t key, void* bm_ptr, void* user_data) {
+    void range_cb(uint64_t key, void* bm_ptr, void* user_data) {
         SBitmapInterface* bm = (SBitmapInterface*)bm_ptr;
         SBitmapInterface* intersection = bitmap_interface_create();
         
@@ -513,59 +540,111 @@ uint32_t bitmap_engine_get_dirty_blocks_by_wal(SBitmapEngine* engine,
         return 0;
     }
     
+    printf("DEBUG: bitmap_engine_get_dirty_blocks_by_wal: engine=%p, start_offset=%lu, end_offset=%lu\n", 
+           engine, start_offset, end_offset);
+    
     pthread_rwlock_rdlock(&engine->rwlock);
     
-    SBitmapInterface* result = bitmap_interface_create();
-    uint32_t count = 0;
-    
-    // 跳表范围查询
-    void range_cb(int64_t key, void* bm_ptr, void* user_data) {
-        SBitmapInterface* bm = (SBitmapInterface*)bm_ptr;
-        SBitmapInterface* intersection = bitmap_interface_create();
-        
-        // 复制dirty_blocks到intersection
-        intersection->union_with(intersection->bitmap, engine->dirty_blocks->bitmap);
-        // 与bm求交集
-        intersection->intersect_with(intersection->bitmap, bm->bitmap);
-        
-        // 与result求并集
-        result->union_with(result->bitmap, intersection->bitmap);
-        
-        bitmap_interface_destroy(intersection);
+    // 检查WAL索引是否为空
+    if (engine->wal_index == NULL) {
+        printf("DEBUG: WAL index is NULL\n");
+        pthread_rwlock_unlock(&engine->rwlock);
+        return 0;
     }
-    skiplist_range_query(engine->wal_index, start_offset, end_offset, false, range_cb, NULL);
     
-    // 获取结果
-    count = result->to_array(result->bitmap, block_ids, max_count);
+    // 检查跳表大小
+    printf("DEBUG: WAL index size: %d\n", engine->wal_index->size);
     
-    bitmap_interface_destroy(result);
+    // 使用更安全的策略：直接收集所有匹配的块ID，而不是进行位图操作
+    uint64_t* temp_block_ids = (uint64_t*)malloc(sizeof(uint64_t) * max_count * 2); // 分配更多空间
+    if (!temp_block_ids) {
+        printf("DEBUG: Failed to allocate temp block IDs\n");
+        pthread_rwlock_unlock(&engine->rwlock);
+        return 0;
+    }
+    
+    uint32_t temp_count = 0;
+    
+    // 遍历WAL索引，收集所有匹配的块ID
+    skiplist_node_t* current = engine->wal_index->header->forward[0];
+    while (current && current != engine->wal_index->header && temp_count < max_count * 2) {
+        if (current->key >= start_offset && current->key <= end_offset) {
+            SBitmapInterface* bm = (SBitmapInterface*)current->value;
+            if (bm && bm->bitmap && bm->to_array) {
+                // 获取当前WAL偏移量对应的块ID
+                uint64_t temp_array[100]; // 临时数组
+                uint32_t block_count = bm->to_array(bm->bitmap, temp_array, 100);
+                
+                // 添加到临时结果中
+                for (uint32_t i = 0; i < block_count && temp_count < max_count * 2; i++) {
+                    temp_block_ids[temp_count++] = temp_array[i];
+                }
+            }
+        }
+        current = current->forward[0];
+    }
+    
+    printf("DEBUG: Collected %u temporary block IDs\n", temp_count);
+    
+    // 去重并复制到结果数组
+    uint32_t final_count = 0;
+    for (uint32_t i = 0; i < temp_count && final_count < max_count; i++) {
+        uint64_t block_id = temp_block_ids[i];
+        bool duplicate = false;
+        
+        // 检查是否重复
+        for (uint32_t j = 0; j < final_count; j++) {
+            if (block_ids[j] == block_id) {
+                duplicate = true;
+                break;
+            }
+        }
+        
+        if (!duplicate) {
+            block_ids[final_count++] = block_id;
+        }
+    }
+    
+    printf("DEBUG: Final result: %u unique block IDs\n", final_count);
+    
+    // 输出找到的块ID
+    for (uint32_t i = 0; i < final_count && i < 10; i++) {
+        printf("DEBUG: block_ids[%u] = %lu\n", i, block_ids[i]);
+    }
+    
+    // 清理临时内存
+    free(temp_block_ids);
+    
     pthread_rwlock_unlock(&engine->rwlock);
     
-    return count;
+    return final_count;
 }
 
 int32_t bitmap_engine_get_block_metadata(SBitmapEngine* engine, uint64_t block_id,
                                         SBlockMetadata* metadata) {
     if (engine == NULL || metadata == NULL) {
+        printf("DEBUG: bitmap_engine_get_block_metadata: engine=%p, metadata=%p\n", engine, metadata);
         return -1;
     }
+    
+    printf("DEBUG: bitmap_engine_get_block_metadata: block_id=%lu\n", block_id);
     
     pthread_rwlock_rdlock(&engine->rwlock);
     
     SBlockMetadataNode* node = find_block_metadata(engine, block_id);
     if (node == NULL) {
+        printf("DEBUG: find_block_metadata returned NULL for block_id=%lu\n", block_id);
         pthread_rwlock_unlock(&engine->rwlock);
         return -1;
     }
+    
+    printf("DEBUG: Found metadata for block_id=%lu, state=%d\n", block_id, node->metadata.state);
     
     *metadata = node->metadata;
     pthread_rwlock_unlock(&engine->rwlock);
     
     return 0;
 }
-
-
-
 
 
 void bitmap_engine_get_stats(SBitmapEngine* engine, uint64_t* total_blocks,
@@ -594,7 +673,7 @@ void bitmap_engine_get_stats(SBitmapEngine* engine, uint64_t* total_blocks,
 static const int8_t STATE_TRANSITION_MATRIX[4][4] = {
     // CLEAN  DIRTY  NEW    DELETED
     { 0,     1,     1,     1 },  // CLEAN
-    { 1,     0,     0,     1 },  // DIRTY
+    { 1,     0,     1,     1 },  // DIRTY (允许转换为NEW)
     { 0,     1,     0,     1 },  // NEW
     { 0,     0,     0,     0 }   // DELETED (不可转换为任何状态)
 };

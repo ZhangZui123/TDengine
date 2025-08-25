@@ -15,7 +15,7 @@ extern "C" {
 
 // 跳表节点
 typedef struct skiplist_node {
-    int64_t key; // 可用于时间戳或WAL偏移量
+    uint64_t key; // 可用于时间戳或WAL偏移量
     void* value; // 使用void*以支持任意类型
     struct skiplist_node* forward[SKIPLIST_MAX_LEVEL];
     struct skiplist_node* backward; // 支持双向遍历
@@ -41,13 +41,13 @@ skiplist_t* skiplist_create();
 void skiplist_destroy(skiplist_t* sl);
 
 // 插入/查找/删除
-void skiplist_insert(skiplist_t* sl, int64_t key, void* value);
-void* skiplist_find(skiplist_t* sl, int64_t key);
-void skiplist_remove(skiplist_t* sl, int64_t key);
+void skiplist_insert(skiplist_t* sl, uint64_t key, void* value);
+void* skiplist_find(skiplist_t* sl, uint64_t key);
+void skiplist_remove(skiplist_t* sl, uint64_t key);
 
 // 范围查询（升序/降序）
-typedef void (*skiplist_range_cb)(int64_t key, void* value, void* user_data);
-void skiplist_range_query(skiplist_t* sl, int64_t start, int64_t end, bool reverse, skiplist_range_cb cb, void* user_data);
+typedef void (*skiplist_range_cb)(uint64_t key, void* value, void* user_data);
+void skiplist_range_query(skiplist_t* sl, uint64_t start, uint64_t end, bool reverse, skiplist_range_cb cb, void* user_data);
 
 // 内存池复用
 void skiplist_node_pool_clear(skiplist_t* sl);

@@ -1,24 +1,9 @@
-/*
- * Copyright (c) 2024 TAOS Data, Inc. <jhtao@taosdata.com>
- *
- * This program is free software: you can use, redistribute, and/or modify
- * it under the terms of the GNU Affero General Public License, version 3
- * or later ("AGPL"), as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <assert.h>
-#include "../src/ring_buffer.h"
+#include "../include/ring_buffer.h"
 
 #define TEST_BUFFER_SIZE 10
 #define TEST_ITERATIONS 1000
@@ -182,22 +167,25 @@ void test_timeout_functionality() {
     void* dequeue_item;
     ret = ring_buffer_dequeue(ring_buffer, &dequeue_item);
     assert(ret == 0);
-    free(dequeue_item);
+    if (dequeue_item == item1) {
+        free(dequeue_item);
+        item1 = NULL;
+        dequeue_item = NULL;
+    }
     
     ret = ring_buffer_dequeue_blocking(ring_buffer, &dequeue_item, 100); // 100ms timeout
     assert(ret != 0); // 应该超时
     
+    ring_buffer_clear(ring_buffer, free);
     ring_buffer_destroy(ring_buffer);
     printf("Timeout functionality test passed!\n");
 }
 
 int main() {
     printf("Starting Ring Buffer Tests...\n");
-    
     test_basic_functionality();
     test_concurrent_access();
     test_timeout_functionality();
-    
     printf("All tests passed!\n");
     return 0;
 } 
