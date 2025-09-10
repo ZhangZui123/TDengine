@@ -103,13 +103,10 @@ int32_t register_storage_engine_interface(const char* name, StorageEngineInterfa
     return 0;
 }
 
-SStorageEngineInterface* get_storage_engine_interface(const char* name) {
-    if (!name) {
-        return get_default_storage_engine_interface();
-    }
-    
+// 内部: 按名称从注册表获取（不存在则返回NULL）
+static SStorageEngineInterface* get_by_name_or_null(const char* name) {
+    if (!name) return NULL;
     pthread_mutex_lock(&g_registry_mutex);
-    
     for (uint32_t i = 0; i < g_registry_size; i++) {
         if (strcmp(g_registry[i].name, name) == 0) {
             SStorageEngineInterface* interface = g_registry[i].factory();
@@ -117,9 +114,38 @@ SStorageEngineInterface* get_storage_engine_interface(const char* name) {
             return interface;
         }
     }
-    
     pthread_mutex_unlock(&g_registry_mutex);
+    return NULL;
+}
+
+// 自动选择逻辑：
+// 1) 若环境变量 USE_MOCK=1 或 STORAGE_ENGINE=mock，则返回 mock
+// 2) 否则优先 tdengine_tmq，若未注册则回退 mock
+// 3) 再回退 default
+static SStorageEngineInterface* get_auto_selected_interface(void) {
+    const char* use_mock = getenv("USE_MOCK");
+    const char* engine_env = getenv("STORAGE_ENGINE");
+    if ((use_mock && strcmp(use_mock, "1") == 0) || (engine_env && strcmp(engine_env, "mock") == 0)) {
+        SStorageEngineInterface* mock = get_by_name_or_null("mock");
+        return mock ? mock : get_default_storage_engine_interface();
+    }
+    // 优先 TMQ
+    SStorageEngineInterface* tmq = get_by_name_or_null("tdengine_tmq");
+    if (tmq) return tmq;
+    // 回退 mock
+    SStorageEngineInterface* mock = get_by_name_or_null("mock");
+    if (mock) return mock;
     return get_default_storage_engine_interface();
+}
+
+SStorageEngineInterface* get_storage_engine_interface(const char* name) {
+    if (!name || strcmp(name, "auto") == 0) {
+        return get_auto_selected_interface();
+    }
+    
+    SStorageEngineInterface* found = get_by_name_or_null(name);
+    if (found) return found;
+    return get_auto_selected_interface();
 }
 
 SStorageEngineInterface* get_default_storage_engine_interface(void) {

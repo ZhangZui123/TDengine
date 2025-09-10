@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "observability.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,6 +58,15 @@ typedef struct {
     
     // 获取统计信息
     int32_t (*get_stats)(uint64_t* events_processed, uint64_t* events_dropped);
+    
+    // 获取详细统计信息
+    int32_t (*get_detailed_stats)(void* engine, void* stats);
+    
+    // 获取可观测性指标
+    int32_t (*get_observability_metrics)(void* engine, SObservabilityMetrics* metrics);
+    
+    // 重置统计信息
+    int32_t (*reset_stats)(void* engine);
     
     // 检查是否支持当前存储引擎
     bool (*is_supported)(void);

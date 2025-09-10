@@ -10,6 +10,8 @@ typedef struct {
     bool interception_installed;
     uint64_t events_processed;
     uint64_t events_dropped;
+    StorageEventCallback event_callback;
+    void* callback_user_data;
     pthread_mutex_t mutex;
 } SMockStorageEngine;
 
@@ -23,12 +25,14 @@ static SMockStorageEngine g_mock_engine = {
 
 // Mock存储引擎实现函数
 static int32_t mock_init(const SStorageEngineConfig* config) {
-    (void)config; // 避免未使用参数警告
+    if (!config) return -1;
     
     pthread_mutex_lock(&g_mock_engine.mutex);
     g_mock_engine.initialized = true;
     g_mock_engine.events_processed = 0;
     g_mock_engine.events_dropped = 0;
+    g_mock_engine.event_callback = config->event_callback;
+    g_mock_engine.callback_user_data = config->callback_user_data;
     pthread_mutex_unlock(&g_mock_engine.mutex);
     
     printf("[Mock] 存储引擎初始化成功\n");
@@ -79,10 +83,16 @@ static int32_t mock_trigger_event(const SStorageEvent* event) {
     }
     
     g_mock_engine.events_processed++;
+    StorageEventCallback cb = g_mock_engine.event_callback;
+    void* user = g_mock_engine.callback_user_data;
     pthread_mutex_unlock(&g_mock_engine.mutex);
     
     printf("[Mock] 触发事件: 类型=%d, 块ID=%lu, WAL偏移量=%lu, 时间戳=%ld\n",
            event->event_type, event->block_id, event->wal_offset, event->timestamp);
+    
+    if (cb) {
+        cb(event, user);
+    }
     
     return 0;
 }
