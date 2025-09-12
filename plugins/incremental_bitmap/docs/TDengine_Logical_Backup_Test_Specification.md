@@ -7,6 +7,7 @@
 - **作者**: 章子渝
 
 ## 目录
+- [0. 评审人员快速开始](#0-评审人员快速开始)
 - [1. 概述](#1-概述)
 - [2. 测试策略](#2-测试策略)
 - [3. 单元测试](#3-单元测试)
@@ -22,6 +23,39 @@
 - [10. 测试环境](#10-测试环境)
 - [11. 测试工具](#11-测试工具)
 - [12. 测试数据](#12-测试数据)
+
+## 0. 评审人员快速开始
+
+本节面向代码评审人员，提供一键本地验证方式。默认使用 Mock 环境，真实环境为可选项。
+
+### 0.1 一键运行（Mock，推荐）
+
+前置：已安装 CMake 和编译器（GCC/Clang）。
+
+```bash
+cd plugins/incremental_bitmap
+./run_tests.sh
+```
+
+- 构建选项：`-DUSE_MOCK=ON -DENABLE_TESTS=ON`
+- 行为：自动编译并执行所有非真实环境测试；单测按 90s 超时保护。
+
+### 0.2 一键运行（真实环境，可选）
+
+前置：本机已安装并启动 TDengine 3.x，`taos` 可用。
+
+```bash
+cd plugins/incremental_bitmap
+./setup_tdengine_test.sh   # 准备数据库/超级表/子表/Topic
+./run_real_tests.sh        # 构建并运行真实环境测试
+```
+
+- 构建选项：`-DUSE_MOCK=OFF -DE2E_TDENGINE_REAL_TESTS=ON -DENABLE_TESTS=ON`
+- 建议：执行完毕后可按文档“12.3 测试数据清理”进行清理。
+
+### 0.3 典型问题与排查
+- 端口/权限：`taos` 无法连接时，检查 TDengine 服务是否启动和权限。
+- 构建失败：删除本地构建目录后重试（例如 `rm -rf plugins/incremental_bitmap/build*`）。
 
 ## 1. 概述
 
