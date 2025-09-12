@@ -38,6 +38,33 @@ static int64_t get_current_timestamp() {
     return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+// 跳表范围查询上下文结构体
+typedef struct {
+    SBitmapEngine* engine_ptr;
+    SBitmapInterface* result_ptr;
+} SRangeQueryCtx;
+
+// 跳表范围查询回调函数（文件级静态函数，避免GCC嵌套函数的栈上trampoline带来的段错误）
+static void bitmap_range_accumulate_cb(uint64_t key, void* bm_ptr, void* user_data) {
+    (void)key;
+    SRangeQueryCtx* ctx = (SRangeQueryCtx*)user_data;
+    if (ctx == NULL || ctx->engine_ptr == NULL || ctx->result_ptr == NULL || bm_ptr == NULL) {
+        return;
+    }
+    SBitmapInterface* bm = (SBitmapInterface*)bm_ptr;
+    SBitmapInterface* intersection = bitmap_interface_create();
+    if (intersection == NULL) {
+        return;
+    }
+    // 复制dirty_blocks到intersection
+    intersection->union_with(intersection->bitmap, ctx->engine_ptr->dirty_blocks->bitmap);
+    // 与bm求交集
+    intersection->intersect_with(intersection->bitmap, bm->bitmap);
+    // 与result求并集
+    ctx->result_ptr->union_with(ctx->result_ptr->bitmap, intersection->bitmap);
+    bitmap_interface_destroy(intersection);
+}
+
 
 // 深拷贝字符串
 static char* deep_copy_string(const char* src) {
@@ -518,31 +545,7 @@ uint32_t bitmap_engine_get_dirty_blocks_by_time(SBitmapEngine* engine,
     SBitmapInterface* result = bitmap_interface_create();
     uint32_t count = 0;
     
-    // 跳表范围查询（避免GCC嵌套函数的栈上trampoline带来的段错误，改为文件级静态回调）
-    typedef struct {
-        SBitmapEngine* engine_ptr;
-        SBitmapInterface* result_ptr;
-    } SRangeQueryCtx;
-
-    static void bitmap_range_accumulate_cb(uint64_t key, void* bm_ptr, void* user_data) {
-        (void)key;
-        SRangeQueryCtx* ctx = (SRangeQueryCtx*)user_data;
-        if (ctx == NULL || ctx->engine_ptr == NULL || ctx->result_ptr == NULL || bm_ptr == NULL) {
-            return;
-        }
-        SBitmapInterface* bm = (SBitmapInterface*)bm_ptr;
-        SBitmapInterface* intersection = bitmap_interface_create();
-        if (intersection == NULL) {
-            return;
-        }
-        // 复制dirty_blocks到intersection
-        intersection->union_with(intersection->bitmap, ctx->engine_ptr->dirty_blocks->bitmap);
-        // 与bm求交集
-        intersection->intersect_with(intersection->bitmap, bm->bitmap);
-        // 与result求并集
-        ctx->result_ptr->union_with(ctx->result_ptr->bitmap, intersection->bitmap);
-        bitmap_interface_destroy(intersection);
-    }
+    // 跳表范围查询（使用文件级静态回调函数）
 
     SRangeQueryCtx ctx = { .engine_ptr = engine, .result_ptr = result };
     skiplist_range_query(engine->time_index, start_time, end_time, false, bitmap_range_accumulate_cb, &ctx);

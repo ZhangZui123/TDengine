@@ -204,7 +204,6 @@ jobs:
         echo "### PITR Tests" >> test_results_summary.md
         echo "- test_pitr_e2e" >> test_results_summary.md
         echo "- test_pitr_e2e_simple" >> test_results_summary.md
-        echo "- test_pitr_pr_review" >> test_results_summary.md
         echo "" >> test_results_summary.md
         echo "## Valgrind Memory Check Coverage" >> test_results_summary.md
         echo "- Core tests: 3/5 (60%)" >> test_results_summary.md

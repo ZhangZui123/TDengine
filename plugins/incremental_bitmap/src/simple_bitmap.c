@@ -76,19 +76,19 @@ static bool ensure_capacity(SSimpleBitmap* bitmap, uint32_t min_capacity) {
     
     // 添加安全检查
     if (bitmap->values == NULL) {
-        printf("DEBUG: ensure_capacity: bitmap->values is NULL\n");
+    // printf("DEBUG: ensure_capacity: bitmap->values is NULL\n");
         return false;
     }
     
     uint64_t* new_values = realloc(bitmap->values, new_capacity * sizeof(uint64_t));
     if (!new_values) {
-        printf("DEBUG: ensure_capacity: realloc failed\n");
+    // printf("DEBUG: ensure_capacity: realloc failed\n");
         return false;
     }
     
     // 检查realloc是否移动了内存块
     if (new_values != bitmap->values) {
-        printf("DEBUG: ensure_capacity: memory moved from %p to %p\n", bitmap->values, new_values);
+    // printf("DEBUG: ensure_capacity: memory moved from %p to %p\n", bitmap->values, new_values);
     }
     
     bitmap->values = new_values;
@@ -96,7 +96,7 @@ static bool ensure_capacity(SSimpleBitmap* bitmap, uint32_t min_capacity) {
     
     // 添加验证
     if (bitmap->values == NULL) {
-        printf("DEBUG: ensure_capacity: bitmap->values became NULL after update\n");
+    // printf("DEBUG: ensure_capacity: bitmap->values became NULL after update\n");
         return false;
     }
     
@@ -109,12 +109,12 @@ static void simple_bitmap_add(void* bitmap, uint64_t value) {
     
     // 添加安全检查
     if (sb == NULL) {
-        printf("DEBUG: simple_bitmap_add: sb is NULL\n");
+    // printf("DEBUG: simple_bitmap_add: sb is NULL\n");
         return;
     }
     
     if (sb->values == NULL) {
-        printf("DEBUG: simple_bitmap_add: sb->values is NULL\n");
+    // printf("DEBUG: simple_bitmap_add: sb->values is NULL\n");
         return;
     }
     
@@ -125,13 +125,13 @@ static void simple_bitmap_add(void* bitmap, uint64_t value) {
     
     // 确保容量足够
     if (!ensure_capacity(sb, sb->count + 1)) {
-        printf("DEBUG: simple_bitmap_add: ensure_capacity failed\n");
+    // printf("DEBUG: simple_bitmap_add: ensure_capacity failed\n");
         return;
     }
     
     // 再次检查values指针
     if (sb->values == NULL) {
-        printf("DEBUG: simple_bitmap_add: sb->values became NULL after ensure_capacity\n");
+    // printf("DEBUG: simple_bitmap_add: sb->values became NULL after ensure_capacity\n");
         return;
     }
     
@@ -401,12 +401,12 @@ void bitmap_interface_destroy(SBitmapInterface* interface) {
         return;
     }
     
-    printf("DEBUG: bitmap_interface_destroy: interface=%p, interface->bitmap=%p\n", 
-           interface, interface->bitmap);
+    // printf("DEBUG: bitmap_interface_destroy: interface=%p, interface->bitmap=%p\n", 
+    //        interface, interface->bitmap);
     
     // 验证位图对象的完整性
     if (interface->bitmap == (void*)0x7d6) {
-        printf("DEBUG: bitmap_interface_destroy: Corrupted bitmap detected, skipping destruction\n");
+        // printf("DEBUG: bitmap_interface_destroy: Corrupted bitmap detected, skipping destruction\n");
         // 清理接口结构体，但不销毁损坏的位图
         free(interface);
         return;
@@ -415,7 +415,7 @@ void bitmap_interface_destroy(SBitmapInterface* interface) {
     if (interface->bitmap) {
         // 验证位图对象是否仍然有效
         if (interface->bitmap < (void*)0x1000) {
-            printf("DEBUG: bitmap_interface_destroy: Invalid bitmap address, skipping destruction\n");
+            // printf("DEBUG: bitmap_interface_destroy: Invalid bitmap address, skipping destruction\n");
             free(interface);
             return;
         }

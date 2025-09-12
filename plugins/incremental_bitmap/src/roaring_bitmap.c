@@ -87,13 +87,13 @@ static void tdengine_roaring_union_with(void* bitmap, const void* other) {
     
     // 严格的参数验证
     if (!rb || !rb->roaring_bitmap || !other_rb || !other_rb->roaring_bitmap) {
-        printf("DEBUG: tdengine_roaring_union_with: Invalid parameters\n");
+    // printf("DEBUG: tdengine_roaring_union_with: Invalid parameters\n");
         return;
     }
     
     // 验证位图对象的完整性
     if (rb->roaring_bitmap == (void*)0x7d6 || other_rb->roaring_bitmap == (void*)0x7d6) {
-        printf("DEBUG: tdengine_roaring_union_with: Corrupted bitmap detected\n");
+    // printf("DEBUG: tdengine_roaring_union_with: Corrupted bitmap detected\n");
         return;
     }
     
@@ -101,7 +101,7 @@ static void tdengine_roaring_union_with(void* bitmap, const void* other) {
     
     // 再次验证位图是否仍然有效
     if (!rb->roaring_bitmap || !other_rb->roaring_bitmap) {
-        printf("DEBUG: tdengine_roaring_union_with: Bitmap became invalid during lock\n");
+    // printf("DEBUG: tdengine_roaring_union_with: Bitmap became invalid during lock\n");
         pthread_mutex_unlock(&rb->mutex);
         return;
     }
