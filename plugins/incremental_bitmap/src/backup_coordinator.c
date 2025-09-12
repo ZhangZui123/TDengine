@@ -146,63 +146,63 @@ uint32_t backup_coordinator_get_dirty_blocks_by_time(SBackupCoordinator* coordin
 uint32_t backup_coordinator_get_incremental_blocks(SBackupCoordinator* coordinator,
                                                   uint64_t start_wal, uint64_t end_wal,
                                                   SIncrementalBlock* blocks, uint32_t max_count) {
-    printf("DEBUG: backup_coordinator_get_incremental_blocks: ENTRY\n");
+    // printf("DEBUG: backup_coordinator_get_incremental_blocks: ENTRY\n");
     
     if (!coordinator || !blocks || max_count == 0) {
-        printf("DEBUG: backup_coordinator_get_incremental_blocks: Invalid parameters\n");
+        // printf("DEBUG: backup_coordinator_get_incremental_blocks: Invalid parameters\n");
         return 0;
     }
     
-    printf("DEBUG: backup_coordinator_get_incremental_blocks: start_wal=%lu, end_wal=%lu, max_count=%u\n", 
-           start_wal, end_wal, max_count);
+    // printf("DEBUG: backup_coordinator_get_incremental_blocks: start_wal=%lu, end_wal=%lu, max_count=%u\n", 
+    //        start_wal, end_wal, max_count);
     
     // 获取脏块ID
     uint64_t* block_ids = (uint64_t*)malloc(sizeof(uint64_t) * max_count);
     if (block_ids == NULL) {
-        printf("DEBUG: Failed to allocate block_ids\n");
+        // printf("DEBUG: Failed to allocate block_ids\n");
         return 0;
     }
     
-    printf("DEBUG: Allocated block_ids at %p\n", block_ids);
+    // printf("DEBUG: Allocated block_ids at %p\n", block_ids);
     
     uint32_t count = bitmap_engine_get_dirty_blocks_by_wal(coordinator->bitmap_engine,
                                                           start_wal, end_wal, block_ids, max_count);
     
-    printf("DEBUG: backup_coordinator_get_incremental_blocks: count=%u, max_count=%u\n", count, max_count);
+    // printf("DEBUG: backup_coordinator_get_incremental_blocks: count=%u, max_count=%u\n", count, max_count);
     
     if (count == 0) {
-        printf("DEBUG: No dirty blocks found, freeing block_ids and returning 0\n");
+    // printf("DEBUG: No dirty blocks found, freeing block_ids and returning 0\n");
         free(block_ids);
         return 0;
     }
     
     // 填充块信息
-    printf("DEBUG: Starting to fill block information\n");
+    // printf("DEBUG: Starting to fill block information\n");
     uint32_t valid_count = 0;
     
     for (uint32_t i = 0; i < count && valid_count < max_count; i++) {
-        printf("DEBUG: Processing block %u: block_id=%lu\n", i, block_ids[i]);
+    // printf("DEBUG: Processing block %u: block_id=%lu\n", i, block_ids[i]);
         
         // 检查数组边界
         if (valid_count >= max_count) {
-            printf("DEBUG: Array boundary check failed: valid_count=%u, max_count=%u\n", valid_count, max_count);
+    // printf("DEBUG: Array boundary check failed: valid_count=%u, max_count=%u\n", valid_count, max_count);
             break;
         }
         
         // 检查blocks数组是否有效
         if (blocks == NULL) {
-            printf("DEBUG: blocks array is NULL\n");
+    // printf("DEBUG: blocks array is NULL\n");
             break;
         }
         
         SBlockMetadata metadata;
-        printf("DEBUG: About to call bitmap_engine_get_block_metadata for block_id=%lu\n", block_ids[i]);
+    // printf("DEBUG: About to call bitmap_engine_get_block_metadata for block_id=%lu\n", block_ids[i]);
         
         int32_t result = bitmap_engine_get_block_metadata(coordinator->bitmap_engine, block_ids[i], &metadata);
-        printf("DEBUG: bitmap_engine_get_block_metadata returned %d for block_id=%lu\n", result, block_ids[i]);
+    // printf("DEBUG: bitmap_engine_get_block_metadata returned %d for block_id=%lu\n", result, block_ids[i]);
         
         if (result == 0) {
-            printf("DEBUG: Successfully got metadata for block_id=%lu\n", block_ids[i]);
+    // printf("DEBUG: Successfully got metadata for block_id=%lu\n", block_ids[i]);
             blocks[valid_count].block_id = block_ids[i];
             blocks[valid_count].wal_offset = metadata.wal_offset;
             blocks[valid_count].timestamp = metadata.timestamp;
@@ -210,19 +210,19 @@ uint32_t backup_coordinator_get_incremental_blocks(SBackupCoordinator* coordinat
             blocks[valid_count].data = NULL;   // 实际数据需要从存储引擎获取
             valid_count++;
         } else {
-            printf("DEBUG: Failed to get metadata for block_id=%lu, skipping this block\n", block_ids[i]);
+    // printf("DEBUG: Failed to get metadata for block_id=%lu, skipping this block\n", block_ids[i]);
             // 跳过这个块，不添加到结果中
             continue;
         }
-        printf("DEBUG: Completed processing block %u, valid_count=%u\n", i, valid_count);
+    // printf("DEBUG: Completed processing block %u, valid_count=%u\n", i, valid_count);
     }
-    printf("DEBUG: Finished filling block information, valid_count=%u\n", valid_count);
+    // printf("DEBUG: Finished filling block information, valid_count=%u\n", valid_count);
     
-    printf("DEBUG: About to free block_ids\n");
+    // printf("DEBUG: About to free block_ids\n");
     free(block_ids);
-    printf("DEBUG: Freed block_ids\n");
+    // printf("DEBUG: Freed block_ids\n");
     
-    printf("DEBUG: Returning valid_count=%u\n", valid_count);
+    // printf("DEBUG: Returning valid_count=%u\n", valid_count);
     return valid_count;
 }
 
@@ -325,7 +325,7 @@ static int32_t plugin_init(const char* config) {
     // 创建位图引擎（使用默认配置）
     SBitmapEngine* bitmap_engine = bitmap_engine_init();
     if (!bitmap_engine) {
-        printf("DEBUG: plugin_init: Failed to create bitmap engine\n");
+    // printf("DEBUG: plugin_init: Failed to create bitmap engine\n");
         return -1;
     }
     
@@ -344,12 +344,12 @@ static int32_t plugin_init(const char* config) {
     // 创建备份协调器
     g_backup_coordinator = backup_coordinator_init(bitmap_engine, &backup_config);
     if (!g_backup_coordinator) {
-        printf("DEBUG: plugin_init: Failed to create backup coordinator\n");
+    // printf("DEBUG: plugin_init: Failed to create backup coordinator\n");
         bitmap_engine_destroy(bitmap_engine);
         return -1;
     }
     
-    printf("DEBUG: plugin_init: Successfully initialized plugin\n");
+    // printf("DEBUG: plugin_init: Successfully initialized plugin\n");
     return 0;
 }
 
@@ -367,7 +367,7 @@ static void plugin_destroy(void) {
             bitmap_engine_destroy(bitmap_engine);
         }
         
-        printf("DEBUG: plugin_destroy: Successfully destroyed plugin\n");
+    // printf("DEBUG: plugin_destroy: Successfully destroyed plugin\n");
     }
 }
 
