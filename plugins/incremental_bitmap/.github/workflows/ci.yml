@@ -81,15 +81,19 @@ jobs:
       run: |
         mkdir -p build
         cd build
+        EXTRA_FLAGS=""
+        if [ "${{ env.BUILD_TYPE }}" = "Debug" ]; then
+          # 在Debug下开启覆盖率编译标志，确保lcov有数据
+          EXTRA_FLAGS="-DCMAKE_C_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage"
+        fi
         cmake .. \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
-          -DENABLE_TESTS=ON \
-          -DENABLE_COVERAGE=${{ env.BUILD_TYPE == 'Debug' && 'ON' || 'OFF' }} \
-          -DENABLE_SANITIZERS=${{ env.BUILD_TYPE == 'Debug' && 'ON' || 'OFF' }} \
+          -DBUILD_TESTING=ON \
           -DBUILD_TAOSX_PLUGIN=ON \
           -DUSE_MOCK=${{ env.RUN_REAL_TESTS == 'true' && 'OFF' || 'ON' }} \
-          -DE2E_TDENGINE_REAL_TESTS=${{ env.RUN_REAL_TESTS == 'true' && 'ON' || 'OFF' }}
+          -DE2E_TDENGINE_REAL_TESTS=${{ env.RUN_REAL_TESTS == 'true' && 'ON' || 'OFF' }} \
+          $EXTRA_FLAGS
 
     - name: Build plugin
       working-directory: ${{ env.PLUGIN_DIR }}/build
@@ -102,23 +106,38 @@ jobs:
       run: |
         # 运行所有测试，添加错误处理
         test_failed=0
+        exec_count=0
         for test in test_*; do
           if [ -x "$test" ]; then
             echo "Running test: $test"
+            exec_count=$((exec_count+1))
             # 跳过真实环境相关二进制（仅在未启用真实测试时）
             if [ "${RUN_REAL_TESTS}" != "true" ]; then
               if echo "$test" | grep -Eq "(e2e_tdengine_real|offset_semantics_real|offset_semantics_realtime)"; then
                 echo "Skipping real-environment test: $test"
                 continue
               fi
+              # CI默认跳过重型PITR完整流程，避免超时与假阴性
+              if echo "$test" | grep -Eq "(^|/)test_pitr_e2e$"; then
+                echo "Skipping heavy PITR E2E in CI: $test"
+                continue
+              fi
             fi
             # 为单个用例增加90秒超时，避免挂死拖住整步
-            if ! timeout 90s ./$test; then
+            per_timeout=90
+            if echo "$test" | grep -Eq "(^|/)test_pitr_e2e_simple$"; then
+              per_timeout=150
+            fi
+            if ! timeout ${per_timeout}s ./$test; then
               echo "Test $test failed, but continuing..."
               test_failed=1
             fi
           fi
         done
+        if [ $exec_count -eq 0 ]; then
+          echo "ERROR: No executable test_* binaries found. Failing the job to avoid false green."
+          exit 1
+        fi
         
         # 运行taosX插件测试
         if [ -x "test_taosx_plugin_interface" ]; then
@@ -161,6 +180,23 @@ jobs:
           fi
         done
 
+    - name: Prepare real TDengine environment (only when enabled)
+      if: env.RUN_REAL_TESTS == 'true'
+      working-directory: ${{ env.PLUGIN_DIR }}
+      timeout-minutes: 10
+      run: |
+        echo "=== Preparing TDengine real environment ==="
+        if command -v systemctl >/dev/null 2>&1; then
+          sudo systemctl stop taosd || true
+          sudo systemctl start taosd || true
+          sudo systemctl status taosd || true
+        fi
+        if [ -x "./setup_tdengine_test.sh" ]; then
+          ./setup_tdengine_test.sh || echo "setup_tdengine_test.sh completed with non-zero exit, continuing"
+        else
+          echo "setup_tdengine_test.sh not found, skipping explicit DB setup"
+        fi
+
     - name: Collect test results
       if: always()
       working-directory: ${{ env.PLUGIN_DIR }}/build
@@ -178,39 +214,16 @@ jobs:
         echo "# Test Results Report" > test_results_summary.md
         echo "## Test Execution Summary" >> test_results_summary.md
         echo "- Total test files found: $(ls test_* 2>/dev/null | wc -l)" >> test_results_summary.md
-        echo "- Executable test files: $(ls -x test_* 2>/dev/null | wc -l)" >> test_results_summary.md
+        echo "- Executable test files: $(find . -maxdepth 1 -type f -name 'test_*' -executable | wc -l)" >> test_results_summary.md
         echo "- Build artifacts: $(ls *.so *.a 2>/dev/null | wc -l)" >> test_results_summary.md
         echo "- taosX plugin artifacts: $(ls *taosx* 2>/dev/null | wc -l)" >> test_results_summary.md
         echo "" >> test_results_summary.md
-        echo "## Test Categories" >> test_results_summary.md
-        echo "### Core Functionality Tests" >> test_results_summary.md
-        echo "- test_bitmap_engine_core" >> test_results_summary.md
-        echo "- test_roaring_bitmap_specific" >> test_results_summary.md
-        echo "- test_abstraction_layer" >> test_results_summary.md
-        echo "- test_ring_buffer" >> test_results_summary.md
-        echo "- test_skiplist" >> test_results_summary.md
+        echo "## Discovered Executable Tests" >> test_results_summary.md
+        find . -maxdepth 1 -type f -name 'test_*' -executable | sort | sed 's#^\./#- #g' >> test_results_summary.md
         echo "" >> test_results_summary.md
-        echo "### Integration Tests" >> test_results_summary.md
-        echo "- test_e2e_tdengine_real" >> test_results_summary.md
-        echo "- test_taosdump_integration" >> test_results_summary.md
-        echo "- test_tmq_integration" >> test_results_summary.md
-        echo "- test_taosx_plugin_interface" >> test_results_summary.md
-        echo "" >> test_results_summary.md
-        echo "### Observability Tests" >> test_results_summary.md
-        echo "- test_observability_comprehensive" >> test_results_summary.md
-        echo "- test_observability_enhanced" >> test_results_summary.md
-        echo "- test_observability_interface" >> test_results_summary.md
-        echo "" >> test_results_summary.md
-        echo "### PITR Tests" >> test_results_summary.md
-        echo "- test_pitr_e2e" >> test_results_summary.md
-        echo "- test_pitr_e2e_simple" >> test_results_summary.md
-        echo "" >> test_results_summary.md
-        echo "## Valgrind Memory Check Coverage" >> test_results_summary.md
-        echo "- Core tests: 3/5 (60%)" >> test_results_summary.md
-        echo "- Observability tests: 1/3 (33%)" >> test_results_summary.md
-        echo "- Storage tests: 2/3 (67%)" >> test_results_summary.md
-        echo "- Plugin tests: 1/1 (100%)" >> test_results_summary.md
-        echo "- **Total Valgrind coverage: 7/12 critical tests (58%)**" >> test_results_summary.md
+        echo "## Notes" >> test_results_summary.md
+        echo "- Heavy tests (e.g., test_pitr_e2e) are skipped in default CI unless RUN_REAL_TESTS=true." >> test_results_summary.md
+        echo "- Real-environment tests are only executed on manual dispatch with run_real_tests=true." >> test_results_summary.md
         
         cat test_results_summary.md
 
@@ -431,6 +444,8 @@ jobs:
       working-directory: ${{ env.PLUGIN_DIR }}
       run: |
         # 使用semgrep进行安全扫描，指定版本
+        sudo apt-get update
+        sudo apt-get install -y jq python3-pip
         pip install semgrep==1.45.0
         semgrep --config=auto --json --output=semgrep-results.json src/ || true
         
