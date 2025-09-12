@@ -149,13 +149,26 @@ read -p "   是否运行内存检查？(y/N): " run_memory_check
 
 if [[ $run_memory_check =~ ^[Yy]$ ]]; then
     echo "   📋 运行Valgrind内存检查..."
-    if timeout 60s valgrind --leak-check=full --error-exitcode=1 ./test_bitmap_engine_core > valgrind.log 2>&1; then
-        echo "      ✅ 通过"
-    else
-        echo "      ❌ 发现内存问题（不计入用例通过率）"
-        echo "      检查日志：valgrind.log"
-        mem_issues=1
-    fi
+    declare -a vg_targets=(
+        "test_bitmap_engine_core"
+        "test_backup_coordinator"
+        "test_skiplist"
+        "test_ring_buffer"
+    )
+    mkdir -p valgrind_logs
+    vg_failed=()
+    for t in "${vg_targets[@]}"; do
+        log_file="valgrind_logs/${t}.log"
+        echo "      ▶ $t..."
+        if timeout 90s valgrind --leak-check=full --error-exitcode=1 ./$t > "$log_file" 2>&1; then
+            echo "        ✅ 通过 ($t)"
+        else
+            echo "        ❌ 发现内存问题 ($t)"
+            echo "        ⤷ 日志：$log_file"
+            mem_issues=1
+            vg_failed+=("$t")
+        fi
+    done
 fi
 
 # 7. 测试结果总结
@@ -167,13 +180,22 @@ if [ $test_results -eq 0 ]; then
     echo "   失败: $failed"
     echo "   总计: $((passed + failed))"
     if [ $mem_issues -eq 1 ]; then
-        echo "   ⚠️  注意：可选内存检查发现问题，详见 valgrind.log"
+        echo "   ⚠️  注意：可选内存检查发现问题，详见 valgrind_logs/*.log"
+        if [ ${#vg_failed[@]} -gt 0 ]; then
+            echo "   受影响的目标：${vg_failed[*]}"
+        fi
     fi
 else
     echo "❌ 部分测试失败，请检查上述错误信息"
     echo "   通过: $passed"
     echo "   失败: $failed"
     echo "   总计: $((passed + failed))"
+    if [ $mem_issues -eq 1 ]; then
+        echo "   ⚠️  同时存在内存检查问题，详见 valgrind_logs/*.log"
+        if [ ${#vg_failed[@]} -gt 0 ]; then
+            echo "   受影响的目标：${vg_failed[*]}"
+        fi
+    fi
 fi
 
 echo ""

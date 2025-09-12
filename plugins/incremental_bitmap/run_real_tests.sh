@@ -62,6 +62,9 @@ test_results=0
 passed=0
 failed=0
 
+# 日志目录
+mkdir -p logs
+
 # 真实环境测试列表
 real_tests=(
     "test_offset_semantics_realtime:实时偏移量语义测试"
@@ -75,13 +78,70 @@ for test_info in "${real_tests[@]}"; do
     test_desc=$(echo "$test_info" | cut -d: -f2)
     
     echo "   📋 运行$test_desc..."
-    if timeout 120s ./$test_name > /dev/null 2>&1; then
+    log_file="logs/${test_name}.log"
+    if timeout 120s ./$test_name > "$log_file" 2>&1; then
         echo "      ✅ 通过"
         ((passed++))
     else
         echo "      ❌ 失败"
+        echo "      ⤷ 查看日志: $log_file"
         ((failed++))
         test_results=1
+    fi
+
+    # 额外校验: taosdump 对比输出必须包含匹配关键词
+    if [ "$test_name" = "test_taosdump_comparison" ]; then
+        if ! grep -i -E "matched|一致|equal|no differences|全部通过|通过率[:：]\s*100|失败测试[:：]\s*0" "$log_file" > /dev/null 2>&1; then
+            echo "      ❌ 对比结果关键字校验失败(未发现 matched/一致/全部通过/通过率100/失败0)"
+            test_results=1
+            # 修正统计：将之前计为通过的项改为失败
+            if [ $passed -gt 0 ]; then passed=$((passed-1)); fi
+            failed=$((failed+1))
+        fi
+    fi
+
+    # 额外校验: 在运行完真实E2E后检查产物
+    if [ "$test_name" = "test_e2e_tdengine_real" ]; then
+        echo "      🔍 校验E2E产物..."
+        # 可能的路径（根据二进制运行目录不同做兼容）
+        paths=(
+            "./pitr_snapshots"
+            "./pitr_recovery"
+            "../build/pitr_snapshots"
+            "../build/pitr_recovery"
+            "./build/pitr_snapshots"
+            "./build/pitr_recovery"
+        )
+
+        artifacts_ok=0
+        for d in "${paths[@]}"; do
+            if [ -d "$d" ]; then
+                # 是否存在非零大小文件
+                if find "$d" -type f -size +0c | head -n 1 | grep -q .; then
+                    artifacts_ok=1
+                fi
+            fi
+        done
+
+        # 报告文件（如果生成）
+        reports_ok=1
+        if [ -f "/tmp/pitr_test_report.txt" ]; then
+            if [ ! -s "/tmp/pitr_test_report.txt" ]; then reports_ok=0; fi
+        fi
+        if [ -f "/tmp/pitr_detailed_report.txt" ]; then
+            if [ ! -s "/tmp/pitr_detailed_report.txt" ]; then reports_ok=0; fi
+            # 关键字段校验
+            if ! grep -E "Total:|Passed:|Success Rate" /tmp/pitr_detailed_report.txt > /dev/null 2>&1; then
+                reports_ok=0
+            fi
+        fi
+
+        if [ $artifacts_ok -ne 1 ] || [ $reports_ok -ne 1 ]; then
+            echo "      ❌ E2E 产物/报告校验失败"
+            test_results=1
+        else
+            echo "      ✅ E2E 产物/报告校验通过"
+        fi
     fi
 done
 
