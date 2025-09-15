@@ -26,12 +26,25 @@
 
 
 
-// === Range query callback context and helper (file scope) ===
+// 哈希函数
+static uint32_t hash_block_id(uint64_t block_id, uint32_t map_size) {
+    return (uint32_t)(block_id % map_size);
+}
+
+// 获取当前时间戳（纳秒）
+static int64_t get_current_timestamp() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// 跳表范围查询上下文结构体
 typedef struct {
     SBitmapEngine* engine_ptr;
     SBitmapInterface* result_ptr;
 } SRangeQueryCtx;
 
+// 跳表范围查询回调函数（文件级静态函数，避免GCC嵌套函数的栈上trampoline带来的段错误）
 static void bitmap_range_accumulate_cb(uint64_t key, void* bm_ptr, void* user_data) {
     (void)key;
     SRangeQueryCtx* ctx = (SRangeQueryCtx*)user_data;
@@ -50,19 +63,6 @@ static void bitmap_range_accumulate_cb(uint64_t key, void* bm_ptr, void* user_da
     // 与result求并集
     ctx->result_ptr->union_with(ctx->result_ptr->bitmap, intersection->bitmap);
     bitmap_interface_destroy(intersection);
-}
-
-
-// 哈希函数
-static uint32_t hash_block_id(uint64_t block_id, uint32_t map_size) {
-    return (uint32_t)(block_id % map_size);
-}
-
-// 获取当前时间戳（纳秒）
-static int64_t get_current_timestamp() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
 
@@ -319,9 +319,29 @@ void bitmap_engine_destroy(SBitmapEngine* engine) {
         wal_node = next;
     }
     
-    // 销毁跳表索引
-    if (engine->time_index) skiplist_destroy(engine->time_index);
-    if (engine->wal_index) skiplist_destroy(engine->wal_index);
+    // 先释放跳表中节点的位图值，再销毁跳表本身（skiplist不负责释放value）
+    if (engine->time_index) {
+        skiplist_node_t* node = engine->time_index->header->forward[0];
+        while (node) {
+            if (node->value) {
+                bitmap_interface_destroy((SBitmapInterface*)node->value);
+                node->value = NULL;
+            }
+            node = node->forward[0];
+        }
+        skiplist_destroy(engine->time_index);
+    }
+    if (engine->wal_index) {
+        skiplist_node_t* node = engine->wal_index->header->forward[0];
+        while (node) {
+            if (node->value) {
+                bitmap_interface_destroy((SBitmapInterface*)node->value);
+                node->value = NULL;
+            }
+            node = node->forward[0];
+        }
+        skiplist_destroy(engine->wal_index);
+    }
     
     // 销毁线程同步
     pthread_mutex_destroy(&engine->mutex);
@@ -545,7 +565,7 @@ uint32_t bitmap_engine_get_dirty_blocks_by_time(SBitmapEngine* engine,
     SBitmapInterface* result = bitmap_interface_create();
     uint32_t count = 0;
     
-    // 跳表范围查询（使用文件级静态回调，避免GCC嵌套函数问题）
+    // 跳表范围查询（使用文件级静态回调函数）
 
     SRangeQueryCtx ctx = { .engine_ptr = engine, .result_ptr = result };
     skiplist_range_query(engine->time_index, start_time, end_time, false, bitmap_range_accumulate_cb, &ctx);

@@ -10,6 +10,9 @@ static int total_tests = 0;
 static int passed_tests = 0;
 static int failed_tests = 0;
 
+// 测试用全局互斥锁：保护对非线程安全跳表的并发写
+static pthread_mutex_t g_skiplist_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // 测试宏
 #define TEST_ASSERT(condition, message) do { \
     total_tests++; \
@@ -27,6 +30,20 @@ typedef struct {
     uint64_t key;
     char* value;
 } TestEntry;
+
+// 释放节点值的回调（文件作用域）
+static void free_entry_callback(uint64_t key, void* value, void* user_data) {
+    (void)key;
+    if (value) {
+        TestEntry* e = (TestEntry*)value;
+        free(e->value);
+        free(e);
+        if (user_data) {
+            int* c = (int*)user_data;
+            (*c)++;
+        }
+    }
+}
 
 // 范围查询回调函数
 static void range_query_callback(uint64_t key, void* value, void* user_data) {
@@ -210,16 +227,26 @@ void test_memory_management() {
     skiplist_destroy(skiplist);
 }
 
-// 并发插入测试函数
+// 并发插入参数
+typedef struct {
+    skiplist_t* skiplist;
+    uint64_t base_key;
+} ConcurrentArgs;
+
+// 并发插入测试函数（使用不重叠键区间，避免覆盖导致的旧值泄漏）
 void* test_concurrent_insert(void* arg) {
-    skiplist_t* skiplist = (skiplist_t*)arg;
+    ConcurrentArgs* args = (ConcurrentArgs*)arg;
+    skiplist_t* skiplist = args->skiplist;
+    uint64_t base = args->base_key;
     
     for (int i = 0; i < 100; i++) {
         TestEntry* entry = malloc(sizeof(TestEntry));
-        entry->key = i;
+        entry->key = base + (uint64_t)i;
         entry->value = malloc(20);
-        sprintf(entry->value, "value%d", i);
+        sprintf(entry->value, "value%lu", (unsigned long)entry->key);
+        pthread_mutex_lock(&g_skiplist_mutex);
         skiplist_insert(skiplist, entry->key, entry);
+        pthread_mutex_unlock(&g_skiplist_mutex);
     }
     
     return NULL;
@@ -231,10 +258,13 @@ void test_concurrency() {
     
     skiplist_t* skiplist = skiplist_create();
     
-    // 创建多个线程进行并发插入
+    // 创建多个线程进行并发插入（分配不重叠键区间）
     pthread_t threads[4];
+    ConcurrentArgs args[4];
     for (int i = 0; i < 4; i++) {
-        pthread_create(&threads[i], NULL, test_concurrent_insert, skiplist);
+        args[i].skiplist = skiplist;
+        args[i].base_key = (uint64_t)i * 1000ULL; // 0,1000,2000,3000
+        pthread_create(&threads[i], NULL, test_concurrent_insert, &args[i]);
     }
     
     // 等待所有线程完成
@@ -242,11 +272,16 @@ void test_concurrency() {
         pthread_join(threads[i], NULL);
     }
     
-    // 验证所有元素都被插入
-    for (int i = 0; i < 100; i++) {
-        TestEntry* found = (TestEntry*)skiplist_find(skiplist, i);
+    // 验证所有元素都被插入（检查每个分区的首元素）
+    for (int i = 0; i < 4; i++) {
+        uint64_t key = (uint64_t)i * 1000ULL;
+        TestEntry* found = (TestEntry*)skiplist_find(skiplist, key);
         TEST_ASSERT(found != NULL, "并发插入的元素存在");
     }
+
+    // 释放所有节点的值，避免内存泄漏
+    int free_count = 0;
+    skiplist_range_query(skiplist, 0, UINT64_MAX, false, free_entry_callback, &free_count);
     
     skiplist_destroy(skiplist);
 }

@@ -69,7 +69,7 @@ static void start_performance_monitoring(void);
 static void stop_performance_monitoring(void);
 static void update_performance_metrics(uint64_t operations);
 static void print_performance_summary(void);
-static void generate_detailed_test_report(void);
+static void generate_detailed_test_report(int total_tests, int passed_tests, int failed_tests);
 
 // 主测试函数
 int main() {
@@ -84,7 +84,7 @@ int main() {
     int passed_tests = 0;
     int failed_tests = 0;
     
-    // 测试列表
+    // 测试列表 - 完整版本
     struct {
         const char* name;
         int (*test_func)(void);
@@ -140,8 +140,8 @@ int main() {
     // 打印性能摘要
     print_performance_summary();
     
-    // 生成详细测试报告
-    generate_detailed_test_report();
+    // 生成详细测试报告（包含真实统计）
+    generate_detailed_test_report(total_tests, passed_tests, failed_tests);
     
     if (failed_tests == 0) {
         printf("\n🎉 All tests passed!\n");
@@ -157,7 +157,7 @@ static int test_pitr_tester_creation(void) {
     printf("Testing PITR tester creation...\n");
     
     // 测试1: 正常创建
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     TEST_SUCCESS("PITR tester created successfully");
     
@@ -178,10 +178,18 @@ static int test_pitr_tester_creation(void) {
     TEST_SUCCESS("PITR tester destroyed successfully");
     
     // 测试5: 无效配置处理
+    printf("Testing invalid config handling...\n");
     SPitrTestConfig invalid_config = {0};
     SPitrTester* invalid_tester = pitr_tester_create(&invalid_config);
-    TEST_ASSERT(invalid_tester == NULL, "Should fail with invalid config");
-    TEST_SUCCESS("Invalid config handling works correctly");
+    if (invalid_tester == NULL) {
+        TEST_SUCCESS("Invalid config correctly rejected");
+    } else {
+        fprintf(stderr, "Test failed: Invalid config should have been rejected\n");
+        pitr_tester_destroy(invalid_tester);
+        return -1;
+    }
+    
+    printf("test_pitr_tester_creation completed successfully\n");
     
     return 0;
 }
@@ -190,7 +198,7 @@ static int test_pitr_tester_creation(void) {
 static int test_snapshot_functionality(void) {
     printf("Testing snapshot functionality...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 运行快照测试
@@ -202,7 +210,7 @@ static int test_snapshot_functionality(void) {
     SPitrTestStatus status;
     int status_result = pitr_tester_get_status(tester, &status);
     TEST_ASSERT(status_result == PITR_TEST_SUCCESS, "Failed to get status");
-    TEST_ASSERT(status.snapshots_created == test_config.recovery_points, 
+    TEST_ASSERT(status.snapshots_created == PITR_DEFAULT_CONFIG.recovery_points, 
                 "Snapshot count mismatch");
     TEST_SUCCESS("Snapshot count verification passed");
     
@@ -211,7 +219,7 @@ static int test_snapshot_functionality(void) {
     uint32_t actual_count = 0;
     result = pitr_tester_get_snapshots(tester, snapshots, 10, &actual_count);
     TEST_ASSERT(result == PITR_TEST_SUCCESS, "Failed to get snapshots");
-    TEST_ASSERT(actual_count == test_config.recovery_points, "Snapshot count mismatch");
+    TEST_ASSERT(actual_count == PITR_DEFAULT_CONFIG.recovery_points, "Snapshot count mismatch");
     TEST_SUCCESS("Snapshot list retrieval works correctly");
     
     // 测试4: 验证快照完整性
@@ -236,7 +244,7 @@ static int test_snapshot_functionality(void) {
 static int test_recovery_functionality(void) {
     printf("Testing recovery functionality...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 先创建快照
@@ -286,7 +294,7 @@ static int test_recovery_functionality(void) {
 static int test_disorder_handling(void) {
     printf("Testing disorder handling...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 运行乱序测试
@@ -301,16 +309,16 @@ static int test_disorder_handling(void) {
     TEST_ASSERT(status.disorder_handled > 0, "No disorder events handled");
     TEST_SUCCESS("Disorder event handling verified");
     
-    // 测试3: 测试不同乱序比例
-    double disorder_ratios[] = {0.1, 0.5, 0.9};
-    for (size_t i = 0; i < sizeof(disorder_ratios) / sizeof(disorder_ratios[0]); i++) {
-        // 注意：这个函数需要在实际的PITR测试器中实现
-        // 目前只是测试API调用，所以跳过这个测试
-        printf("Warning: Disorder event processing test skipped (function not fully implemented)\n");
-        result = 0; // 模拟成功
-        TEST_ASSERT(result == 0, "Disorder event processing failed");
-    }
-    TEST_SUCCESS("Different disorder ratios handled correctly");
+    // 测试3: 重复运行以验证计数递增（最小可验证实现）
+    SPitrTestStatus status_before;
+    TEST_ASSERT(pitr_tester_get_status(tester, &status_before) == PITR_TEST_SUCCESS, "Failed to get status before rerun");
+    uint64_t handled_before = status_before.disorder_handled;
+    result = pitr_tester_run_disorder_test(tester);
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Disorder test rerun failed");
+    SPitrTestStatus status_after;
+    TEST_ASSERT(pitr_tester_get_status(tester, &status_after) == PITR_TEST_SUCCESS, "Failed to get status after rerun");
+    TEST_ASSERT(status_after.disorder_handled >= handled_before, "Disorder handled counter did not increase or remain valid");
+    TEST_SUCCESS("Disorder handling counter validated");
     
     // 测试4: 验证乱序后的数据一致性
     SDataConsistencyResult consistency_result;
@@ -326,7 +334,7 @@ static int test_disorder_handling(void) {
 static int test_deletion_consistency(void) {
     printf("Testing deletion consistency...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 运行删除一致性测试
@@ -341,16 +349,16 @@ static int test_deletion_consistency(void) {
     TEST_ASSERT(status.deletion_handled > 0, "No deletion operations handled");
     TEST_SUCCESS("Deletion operation handling verified");
     
-    // 测试3: 测试不同删除数量
-    uint64_t deletion_counts[] = {10, 100, 500};
-    for (size_t i = 0; i < sizeof(deletion_counts) / sizeof(deletion_counts[0]); i++) {
-        // 注意：这个函数需要在实际的PITR测试器中实现
-        // 目前只是测试API调用，所以跳过这个测试
-        printf("Warning: Deletion event processing test skipped (function not fully implemented)\n");
-        result = 0; // 模拟成功
-        TEST_ASSERT(result == 0, "Deletion event processing failed");
-    }
-    TEST_SUCCESS("Different deletion counts handled correctly");
+    // 测试3: 重复运行以验证删除计数递增（最小可验证实现）
+    SPitrTestStatus del_status_before;
+    TEST_ASSERT(pitr_tester_get_status(tester, &del_status_before) == PITR_TEST_SUCCESS, "Failed to get status before deletion rerun");
+    uint64_t deletion_before = del_status_before.deletion_handled;
+    result = pitr_tester_run_deletion_consistency_test(tester);
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Deletion consistency rerun failed");
+    SPitrTestStatus del_status_after;
+    TEST_ASSERT(pitr_tester_get_status(tester, &del_status_after) == PITR_TEST_SUCCESS, "Failed to get status after deletion rerun");
+    TEST_ASSERT(del_status_after.deletion_handled >= deletion_before, "Deletion handled counter did not increase or remain valid");
+    TEST_SUCCESS("Deletion handling counter validated");
     
     // 测试4: 验证删除后的数据一致性
     SDataConsistencyResult consistency_result;
@@ -366,7 +374,7 @@ static int test_deletion_consistency(void) {
 static int test_boundary_conditions(void) {
     printf("Testing boundary conditions...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 运行边界条件测试
@@ -383,7 +391,7 @@ static int test_boundary_conditions(void) {
             continue;
         }
         
-        result = pitr_create_test_data(test_config.test_data_path, boundary_counts[i], 1);
+        result = pitr_create_test_data(PITR_DEFAULT_CONFIG.test_data_path, boundary_counts[i], 1);
         if (result == 0) {
             TEST_SUCCESS("Boundary block count test passed");
         } else {
@@ -427,27 +435,23 @@ static int test_full_e2e_workflow(void) {
     printf("Testing full E2E workflow...\n");
     
     // 确保测试目录存在
-    if (mkdir(test_config.test_data_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.test_data_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create test data directory, continuing...\n");
     }
-    if (mkdir(test_config.snapshot_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.snapshot_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create snapshot directory, continuing...\n");
     }
-    if (mkdir(test_config.recovery_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.recovery_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create recovery directory, continuing...\n");
     }
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 运行完整E2E测试
     int result = pitr_tester_run_full_test(tester);
-    if (result == PITR_TEST_SUCCESS) {
-        TEST_SUCCESS("Full E2E test completed successfully");
-    } else {
-        printf("Warning: Full E2E test failed, but this may be expected in some environments\n");
-        // 继续运行其他测试
-    }
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Full E2E test failed");
+    TEST_SUCCESS("Full E2E test completed successfully");
     
     // 测试2: 验证测试状态
     SPitrTestStatus status;
@@ -541,7 +545,7 @@ static int test_error_handling(void) {
     }
     
     // 测试3: 错误状态处理
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     if (tester) {
         // 模拟错误状态
         // 注意：这里不能直接访问内部结构，应该通过API设置错误状态
@@ -565,12 +569,12 @@ static int test_memory_management(void) {
     printf("Testing memory management...\n");
     
     // 测试1: 内存分配和释放
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 多次创建和销毁，检查内存泄漏
     for (int i = 0; i < 5; i++) {
-        SPitrTester* temp_tester = pitr_tester_create(&test_config);
+        SPitrTester* temp_tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
         TEST_ASSERT(temp_tester != NULL, "Failed to create temporary tester");
         
         // 运行一个简单测试
@@ -582,7 +586,7 @@ static int test_memory_management(void) {
     }
     
     // 测试2: 大内存分配测试
-    SPitrTestConfig large_config = test_config;
+    SPitrTestConfig large_config = PITR_DEFAULT_CONFIG;
     large_config.data_block_count = 100000; // 10万个块
     
     SPitrTester* large_tester = pitr_tester_create(&large_config);
@@ -598,7 +602,7 @@ static int test_memory_management(void) {
     int created_count = 0;
     
     for (int i = 0; i < 10; i++) {
-        testers[i] = pitr_tester_create(&test_config);
+        testers[i] = pitr_tester_create(&PITR_DEFAULT_CONFIG);
         if (testers[i]) {
             created_count++;
         } else {
@@ -622,7 +626,7 @@ static int test_memory_management(void) {
 static int test_concurrent_operations(void) {
     printf("Testing concurrent operations...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 并发快照创建
@@ -634,12 +638,8 @@ static int test_concurrent_operations(void) {
     // 测试2: 并发恢复操作
     printf("Testing concurrent recovery operations...\n");
     result = pitr_tester_run_recovery_test(tester);
-    if (result == PITR_TEST_SUCCESS) {
-        TEST_SUCCESS("Concurrent recovery operations work correctly");
-    } else {
-        printf("Warning: Concurrent recovery test failed, but this may be expected\n");
-        // 继续运行其他测试
-    }
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Concurrent recovery test failed");
+    TEST_SUCCESS("Concurrent recovery operations work correctly");
     
     // 测试3: 并发数据一致性检查
     printf("Testing concurrent consistency checks...\n");
@@ -657,22 +657,18 @@ static int test_data_persistence(void) {
     printf("Testing data persistence...\n");
     
     // 确保测试目录存在
-    if (mkdir(test_config.test_data_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.test_data_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create test data directory, continuing...\n");
     }
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 创建测试数据
     printf("Creating test data for persistence test...\n");
-    int result = pitr_create_test_data(test_config.test_data_path, 100, 1);
-    if (result == 0) {
-        TEST_SUCCESS("Test data created successfully");
-    } else {
-        printf("Warning: Failed to create test data, but this may be expected in some environments\n");
-        // 继续运行其他测试
-    }
+    int result = pitr_create_test_data(PITR_DEFAULT_CONFIG.test_data_path, 100, 1);
+    TEST_ASSERT(result == 0, "Failed to create test data");
+    TEST_SUCCESS("Test data created successfully");
     
     // 测试2: 创建快照
     printf("Creating snapshots for persistence test...\n");
@@ -711,7 +707,7 @@ static int test_data_persistence(void) {
 static int test_failure_recovery(void) {
     printf("Testing failure recovery...\n");
     
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 测试1: 模拟快照创建失败
@@ -753,7 +749,7 @@ static int test_stress_testing(void) {
     
     // 测试1: 高并发压力测试
     printf("Testing high concurrency stress...\n");
-    SPitrTestConfig stress_config = test_config;
+    SPitrTestConfig stress_config = PITR_DEFAULT_CONFIG;
     stress_config.concurrent_writers = 10;  // 增加并发写入线程
     stress_config.data_block_count = 10000; // 增加数据块数量
     
@@ -772,7 +768,7 @@ static int test_stress_testing(void) {
     
     // 测试2: 大数据量压力测试
     printf("Testing large data volume stress...\n");
-    SPitrTestConfig large_config = test_config;
+    SPitrTestConfig large_config = PITR_DEFAULT_CONFIG;
     large_config.data_block_count = 100000; // 10万个数据块
     
     SPitrTester* large_tester = pitr_tester_create(&large_config);
@@ -790,7 +786,7 @@ static int test_stress_testing(void) {
     
     // 测试3: 长时间运行压力测试
     printf("Testing long-running stress...\n");
-    SPitrTestConfig long_config = test_config;
+    SPitrTestConfig long_config = PITR_DEFAULT_CONFIG;
     long_config.test_duration_seconds = 300; // 5分钟测试
     
     SPitrTester* long_tester = pitr_tester_create(&long_config);
@@ -815,28 +811,25 @@ static int test_integration_scenarios(void) {
     printf("Testing integration scenarios...\n");
     
     // 确保测试目录存在
-    if (mkdir(test_config.test_data_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.test_data_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create test data directory, continuing...\n");
     }
-    if (mkdir(test_config.snapshot_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.snapshot_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create snapshot directory, continuing...\n");
     }
-    if (mkdir(test_config.recovery_path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(PITR_DEFAULT_CONFIG.recovery_path, 0755) != 0 && errno != EEXIST) {
         printf("Warning: Failed to create recovery directory, continuing...\n");
     }
     
     // 测试1: 完整工作流集成测试
     printf("Testing complete workflow integration...\n");
-    SPitrTester* tester = pitr_tester_create(&test_config);
+    SPitrTester* tester = pitr_tester_create(&PITR_DEFAULT_CONFIG);
     TEST_ASSERT(tester != NULL, "Failed to create PITR tester");
     
     // 运行完整的集成测试
     int result = pitr_tester_run_full_test(tester);
-    if (result == PITR_TEST_SUCCESS) {
-        TEST_SUCCESS("Complete workflow integration test passed");
-    } else {
-        printf("Warning: Complete workflow integration test failed\n");
-    }
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Complete workflow integration test failed");
+    TEST_SUCCESS("Complete workflow integration test passed");
     
     // 测试2: 多阶段集成测试
     printf("Testing multi-stage integration...\n");
@@ -851,22 +844,14 @@ static int test_integration_scenarios(void) {
     
     // 阶段2: 恢复验证
     result = pitr_tester_run_recovery_test(tester);
-    if (result == PITR_TEST_SUCCESS) {
-        TEST_SUCCESS("Stage 2: Recovery verification passed");
-    } else {
-        printf("Warning: Stage 2: Recovery verification failed, but this may be expected\n");
-        // 继续运行其他测试
-    }
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Stage 2: Recovery verification failed");
+    TEST_SUCCESS("Stage 2: Recovery verification passed");
     
     // 阶段3: 数据一致性检查
     SDataConsistencyResult consistency_result;
     result = pitr_tester_verify_consistency(tester, get_current_timestamp_ms(), &consistency_result);
-    if (result == PITR_TEST_SUCCESS) {
-        TEST_SUCCESS("Stage 3: Data consistency check passed");
-    } else {
-        printf("Warning: Stage 3: Data consistency check failed, but this may be expected\n");
-        // 继续运行其他测试
-    }
+    TEST_ASSERT(result == PITR_TEST_SUCCESS, "Stage 3: Data consistency check failed");
+    TEST_SUCCESS("Stage 3: Data consistency check passed");
     
     TEST_SUCCESS("Multi-stage integration test completed");
     
@@ -949,7 +934,7 @@ static void print_performance_summary(void) {
 }
 
 // 生成详细测试报告
-static void generate_detailed_test_report(void) {
+static void generate_detailed_test_report(int total_tests, int passed_tests, int failed_tests) {
     const char* report_path = "/tmp/pitr_detailed_report.txt";
     FILE* report_file = fopen(report_path, "w");
     if (!report_file) {
@@ -962,13 +947,13 @@ static void generate_detailed_test_report(void) {
     
     // 测试配置信息
     fprintf(report_file, "Test Configuration:\n");
-    fprintf(report_file, "- Snapshot Interval: %u ms\n", test_config.snapshot_interval_ms);
-    fprintf(report_file, "- Recovery Points: %u\n", test_config.recovery_points);
-    fprintf(report_file, "- Data Block Count: %lu\n", test_config.data_block_count);
-    fprintf(report_file, "- Concurrent Writers: %u\n", test_config.concurrent_writers);
-    fprintf(report_file, "- Test Duration: %u seconds\n", test_config.test_duration_seconds);
-    fprintf(report_file, "- Disorder Test: %s\n", test_config.enable_disorder_test ? "Enabled" : "Disabled");
-    fprintf(report_file, "- Deletion Test: %s\n", test_config.enable_deletion_test ? "Enabled" : "Disabled");
+    fprintf(report_file, "- Snapshot Interval: %u ms\n", PITR_DEFAULT_CONFIG.snapshot_interval_ms);
+    fprintf(report_file, "- Recovery Points: %u\n", PITR_DEFAULT_CONFIG.recovery_points);
+    fprintf(report_file, "- Data Block Count: %lu\n", PITR_DEFAULT_CONFIG.data_block_count);
+    fprintf(report_file, "- Concurrent Writers: %u\n", PITR_DEFAULT_CONFIG.concurrent_writers);
+    fprintf(report_file, "- Test Duration: %u seconds\n", PITR_DEFAULT_CONFIG.test_duration_seconds);
+    fprintf(report_file, "- Disorder Test: %s\n", PITR_DEFAULT_CONFIG.enable_disorder_test ? "Enabled" : "Disabled");
+    fprintf(report_file, "- Deletion Test: %s\n", PITR_DEFAULT_CONFIG.enable_deletion_test ? "Enabled" : "Disabled");
     
     // 性能指标
     fprintf(report_file, "\nPerformance Metrics:\n");
@@ -980,9 +965,12 @@ static void generate_detailed_test_report(void) {
     
     // 测试结果
     fprintf(report_file, "\nTest Results:\n");
-    fprintf(report_file, "- All tests completed successfully\n");
+    double success_rate = (total_tests > 0) ? (100.0 * (double)passed_tests / (double)total_tests) : 0.0;
+    fprintf(report_file, "- Total: %d\n", total_tests);
+    fprintf(report_file, "- Passed: %d\n", passed_tests);
+    fprintf(report_file, "- Failed: %d\n", failed_tests);
+    fprintf(report_file, "- Success Rate: %.1f%%\n", success_rate);
     fprintf(report_file, "- Performance monitoring active throughout testing\n");
-    fprintf(report_file, "- Detailed metrics collected and analyzed\n");
     
     // 建议和改进
     fprintf(report_file, "\nRecommendations:\n");

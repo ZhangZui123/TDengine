@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -41,6 +40,7 @@ static pthread_mutex_t g_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 static void print_step(const char* step);
 static int run_tmq_pipeline_test(const E2ETestConfig* config, E2EPerfTimer* timer);
 static void e2e_event_callback(const SStorageEvent* event, void* user_data);
+static int run_closed_loop_taosdump_comparison(void);
 
 // 打印步骤信息
 static void print_step(const char* step) {
@@ -156,6 +156,20 @@ static int run_tmq_pipeline_test(const E2ETestConfig* config, E2EPerfTimer* time
     return 0;
 }
 
+// 运行闭环验证：调用现有 taosdump 对比测试（二进制应与本测试同目录）
+static int run_closed_loop_taosdump_comparison(void) {
+    printf("\n[闭环] 真实数据→导出→对比\n");
+    // 将输出重定向，便于脚本进一步校验
+    int rc = system("./test_taosdump_comparison > /tmp/test_taosdump_comparison_inline.log 2>&1");
+    if (rc == 0) {
+        printf("  闭环验证: ✓ PASSED (日志: /tmp/test_taosdump_comparison_inline.log)\n");
+        return 0;
+    } else {
+        printf("  闭环验证: ✗ FAILED (日志: /tmp/test_taosdump_comparison_inline.log, rc=%d)\n", rc);
+        return -1;
+    }
+}
+
 int main(void) {
     print_step("Real TDengine E2E Test");
 
@@ -241,6 +255,9 @@ int main(void) {
         printf("  说明: 核心TMQ管道功能已验证，一致性测试需要完整PITR环境\n");
     }
 
+    // 闭环验证（小数据集）：依赖现有对比测试完整跑通导出与比对
+    int closed_loop_rc = run_closed_loop_taosdump_comparison();
+
     printf("\n[3/3] 端到端性能汇总\n");
     E2EPerfTimer total_timer;
     e2e_perf_timer_start(&total_timer);
@@ -282,8 +299,9 @@ int main(void) {
     printf("Consistency Check:      %s\n", consistency_rc == 0 ? "✓ PASSED" : "⚠ SKIPPED");
     printf("Performance Analysis:   ✓ COMPLETED\n");
     printf("Data Volume Control:    ✓ ENABLED\n");
+    printf("Closed Loop (Export):   %s\n", closed_loop_rc == 0 ? "✓ PASSED" : "✗ FAILED");
     
-    bool overall_pass = (rc == 0) && (consistency_rc == 0 || consistency_rc < 0);
+    bool overall_pass = (rc == 0) && (consistency_rc == 0 || consistency_rc < 0) && (closed_loop_rc == 0);
     printf("Overall Status:         %s\n", overall_pass ? "✓ PASSED" : "⚠ PARTIAL");
     printf("==========================================\n");
 
