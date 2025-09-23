@@ -378,7 +378,7 @@ int32_t mndSnapshotDoWrite(const SSyncFSM *pFsm, void *pWriter, void *pBuf, int3
 static void mndBecomeFollower(const SSyncFSM *pFsm) {
   SMnode    *pMnode = pFsm->data;
   SSyncMgmt *pMgmt = &pMnode->syncMgmt;
-  mInfo("vgId:1, become follower");
+  mInfo("vgId:1, becomefollower callback");
 
   (void)taosThreadMutexLock(&pMgmt->lock);
   if (pMgmt->transId != 0) {
@@ -393,7 +393,7 @@ static void mndBecomeFollower(const SSyncFSM *pFsm) {
   }
   (void)taosThreadMutexUnlock(&pMgmt->lock);
 
-  mndUpdateStreamExecInfoRole(pMnode, NODE_ROLE_FOLLOWER);
+  msmHandleBecomeNotLeader(pMnode);  
 }
 
 static void mndBecomeLearner(const SSyncFSM *pFsm) {
@@ -413,14 +413,15 @@ static void mndBecomeLearner(const SSyncFSM *pFsm) {
     }
   }
   (void)taosThreadMutexUnlock(&pMgmt->lock);
+
+  msmHandleBecomeNotLeader(pMnode);  
 }
 
 static void mndBecomeLeader(const SSyncFSM *pFsm) {
-  mInfo("vgId:1, become leader");
+  mInfo("vgId:1, becomeleader callback");
   SMnode *pMnode = pFsm->data;
 
-  mndUpdateStreamExecInfoRole(pMnode, NODE_ROLE_LEADER);
-  mndStreamResetInitTaskListLoadFlag();
+  msmHandleBecomeLeader(pMnode);
 }
 
 static bool mndApplyQueueEmpty(const SSyncFSM *pFsm) {
@@ -492,15 +493,16 @@ int32_t mndInitSync(SMnode *pMnode) {
       .syncEqMsg = mndSyncEqMsg,
       .syncEqCtrlMsg = mndSyncEqCtrlMsg,
       .pingMs = 5000,
-      .electMs = 3000,
-      .heartbeatMs = 500,
+      .electMs = tsMnodeElectIntervalMs,
+      .heartbeatMs = tsMnodeHeartbeatIntervalMs,
   };
 
   snprintf(syncInfo.path, sizeof(syncInfo.path), "%s%ssync", pMnode->path, TD_DIRSEP);
   syncInfo.pFsm = mndSyncMakeFsm(pMnode);
 
-  mInfo("vgId:1, start to open mnode sync, replica:%d selfIndex:%d", pMgmt->numOfReplicas, pMgmt->selfIndex);
   SSyncCfg *pCfg = &syncInfo.syncCfg;
+  mInfo("vgId:1, start to open mnode sync, replica:%d selfIndex:%d, electMs:%d, heartbeatMs:%d", pMgmt->numOfReplicas, 
+    pMgmt->selfIndex, syncInfo.electMs, syncInfo.heartbeatMs);
   pCfg->totalReplicaNum = pMgmt->numOfTotalReplicas;
   pCfg->replicaNum = pMgmt->numOfReplicas;
   pCfg->myIndex = pMgmt->selfIndex;

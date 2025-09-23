@@ -3,15 +3,9 @@ title: TDengine Components
 slug: /operations-and-maintenance/tdengine-components
 ---
 
-import Image from '@theme/IdealImage';
-import imgEcosys from '../assets/tdengine-components-01.png';
-
 In the TDengine installation package, in addition to the TDengine database engine taosd, several additional components are provided to facilitate user experience. taosAdapter serves as a bridge between applications and TDengine; taosKeeper is a tool for exporting TDengine monitoring metrics; taosX is a data pipeline tool; taosExplorer is a graphical management tool; taosc is the TDengine client driver. The diagram below shows the topology of the entire TDengine product ecosystem (components taosX, taosX Agent are only available in TDengine Enterprise).
 
-<figure>
-<Image img={imgEcosys} alt="TDengine ecosystem"/>
-<figcaption>TDengine ecosystem</figcaption>
-</figure>
+![TDengine ecosystem](../assets/tdengine-components-01.png)
 
 ## taosd
 
@@ -60,7 +54,7 @@ To simplify the use and management of the database for users, TDengine Enterpris
 
 Through taosExplorer, users can execute SQL queries, monitor system status in real-time, manage user permissions, and perform data backup and recovery operations. Additionally, it supports data synchronization with other clusters, data export, and management of topics and stream computing, among other features.
 
-It is worth mentioning that the community edition and enterprise edition of taosExplorer differ in functionality. The enterprise edition offers more features and higher levels of technical support to meet the needs of enterprise users. For specific differences and detailed information, users can refer to the official TDengine documentation.
+It is worth mentioning that the TSDB-OSS edition and TSDB-Enterprise edition of taosExplorer differ in functionality. The TSDB-Enterprise offers more features and higher levels of technical support to meet the needs of enterprise users. For specific differences and detailed information, users can refer to the official TDengine documentation.
 
 ## taosX
 
