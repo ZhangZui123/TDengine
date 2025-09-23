@@ -21,6 +21,7 @@
 #include "tanalytics.h"
 #include "tchecksum.h"
 #include "tutil.h"
+#include "stream.h"
 
 extern SConfig *tsCfg;
 
@@ -172,13 +173,13 @@ void dmSendStatusReq(SDnodeMgmt *pMgmt) {
   req.timestamp = taosGetTimestampMs();
   pMgmt->statusSeq++;
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to mgnt statusInfolock", pMgmt->statusSeq);
+  dTrace("send status req to mnode, begin to mgnt statusInfolock, statusSeq:%d", pMgmt->statusSeq);
   if (taosThreadMutexLock(&pMgmt->pData->statusInfolock) != 0) {
     dError("failed to lock status info lock");
     return;
   }
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to get dnode info", pMgmt->statusSeq);
+  dTrace("send status req to mnode, begin to get dnode info, statusSeq:%d", pMgmt->statusSeq);
   req.sver = tsVersion;
   req.dnodeVer = tsDnodeData.dnodeVer;
   req.dnodeId = tsDnodeData.dnodeId;
@@ -194,7 +195,7 @@ void dmSendStatusReq(SDnodeMgmt *pMgmt) {
   tstrncpy(req.dnodeEp, tsLocalEp, TSDB_EP_LEN);
   tstrncpy(req.machineId, tsDnodeData.machineId, TSDB_MACHINE_ID_LEN + 1);
 
-  req.clusterCfg.statusInterval = tsStatusInterval;
+  req.clusterCfg.statusIntervalMs = tsStatusIntervalMs;
   req.clusterCfg.checkTime = 0;
   req.clusterCfg.ttlChangeOnWrite = tsTtlChangeOnWrite;
   req.clusterCfg.enableWhiteList = tsEnableWhiteList ? 1 : 0;
@@ -215,12 +216,12 @@ void dmSendStatusReq(SDnodeMgmt *pMgmt) {
   memcpy(req.clusterCfg.locale, tsLocale, TD_LOCALE_LEN);
   memcpy(req.clusterCfg.charset, tsCharset, TD_LOCALE_LEN);
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to get vnode loads", pMgmt->statusSeq);
+  dTrace("send status req to mnode, begin to get vnode loads, statusSeq:%d", pMgmt->statusSeq);
 
   req.pVloads = tsVinfo.pVloads;
   tsVinfo.pVloads = NULL;
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to get mnode loads", pMgmt->statusSeq);
+  dTrace("send status req to mnode, begin to get mnode loads, statusSeq:%d", pMgmt->statusSeq);
   req.mload = tsMLoad;
 
   if (taosThreadMutexUnlock(&pMgmt->pData->statusInfolock) != 0) {
@@ -228,7 +229,7 @@ void dmSendStatusReq(SDnodeMgmt *pMgmt) {
     return;
   }
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to get qnode loads", pMgmt->statusSeq);
+  dTrace("send status req to mnode, begin to get qnode loads, statusSeq:%d", pMgmt->statusSeq);
   (*pMgmt->getQnodeLoadsFp)(&req.qload);
 
   req.statusSeq = pMgmt->statusSeq;
@@ -260,17 +261,16 @@ void dmSendStatusReq(SDnodeMgmt *pMgmt) {
                     .info.handle = 0};
   SRpcMsg rpcRsp = {0};
 
-  dTrace("send status req to mnode, dnodeVer:%" PRId64 " statusSeq:%d", req.dnodeVer, req.statusSeq);
+  dDebug("send status req to mnode, dnodeVer:%" PRId64 " statusSeq:%d", req.dnodeVer, req.statusSeq);
 
   SEpSet epSet = {0};
   int8_t epUpdated = 0;
   (void)dmGetMnodeEpSet(pMgmt->pData, &epSet);
 
-  dDebug("send status req to mnode, statusSeq:%d, begin to send rpc msg", pMgmt->statusSeq);
-  code =
-      rpcSendRecvWithTimeout(pMgmt->msgCb.statusRpc, &epSet, &rpcMsg, &rpcRsp, &epUpdated, tsStatusInterval * 5 * 1000);
+  dTrace("send status req to mnode, begin to send rpc msg, statusSeq:%d", pMgmt->statusSeq);
+  code = rpcSendRecvWithTimeout(pMgmt->msgCb.statusRpc, &epSet, &rpcMsg, &rpcRsp, &epUpdated, tsStatusSRTimeoutMs);
   if (code != 0) {
-    dError("failed to SendRecv status req with timeout %d since %s", tsStatusInterval * 5 * 1000, tstrerror(code));
+    dError("failed to SendRecv status req with timeout %d since %s", tsStatusSRTimeoutMs, tstrerror(code));
     return;
   }
 
@@ -387,10 +387,9 @@ void dmSendConfigReq(SDnodeMgmt *pMgmt) {
   (void)dmGetMnodeEpSet(pMgmt->pData, &epSet);
 
   dDebug("send status req to mnode, statusSeq:%d, begin to send rpc msg", pMgmt->statusSeq);
-  code =
-      rpcSendRecvWithTimeout(pMgmt->msgCb.statusRpc, &epSet, &rpcMsg, &rpcRsp, &epUpdated, tsStatusInterval * 5 * 1000);
+  code = rpcSendRecvWithTimeout(pMgmt->msgCb.statusRpc, &epSet, &rpcMsg, &rpcRsp, &epUpdated, tsStatusSRTimeoutMs);
   if (code != 0) {
-    dError("failed to SendRecv config req with timeout %d since %s", tsStatusInterval * 5 * 1000, tstrerror(code));
+    dError("failed to SendRecv config req with timeout %d since %s", tsStatusSRTimeoutMs, tstrerror(code));
     return;
   }
   if (rpcRsp.code != 0) {
@@ -515,8 +514,97 @@ int32_t dmProcessConfigReq(SDnodeMgmt *pMgmt, SRpcMsg *pMsg) {
   if (pItem == NULL) {
     return TSDB_CODE_CFG_NOT_FOUND;
   }
+
+  if (taosStrncasecmp(cfgReq.config, "syncTimeout", 128) == 0) {
+    char value[10] = {0};
+    sscanf(cfgReq.value, "%d", &tsSyncTimeout);
+
+    if (tsSyncTimeout > 0) {
+      SConfigItem *pItemTmp = NULL;
+      char tmp[10] = {0};
+
+      sprintf(tmp, "%d", tsSyncTimeout);
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "arbSetAssignedTimeoutMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+
+      sprintf(tmp, "%d", tsSyncTimeout / 4);
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "arbHeartBeatIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "arbCheckSyncIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+
+      sprintf(tmp, "%d", (tsSyncTimeout - tsSyncTimeout/4)/2);
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "syncVnodeElectIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "syncMnodeElectIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+      TAOS_CHECK_RETURN(cfgGetAndSetItem(pCfg, &pItemTmp, "statusTimeoutMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+
+      sprintf(tmp, "%d", (tsSyncTimeout - tsSyncTimeout / 4) / 4);
+      TAOS_CHECK_RETURN(cfgGetAndSetItem(pCfg, &pItemTmp, "statusSRTimeoutMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+
+      sprintf(tmp, "%d", (tsSyncTimeout - tsSyncTimeout/4)/8);
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "syncVnodeHeartbeatIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+      TAOS_CHECK_RETURN(
+          cfgGetAndSetItem(pCfg, &pItemTmp, "syncMnodeHeartbeatIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+      TAOS_CHECK_RETURN(cfgGetAndSetItem(pCfg, &pItemTmp, "statusIntervalMs", tmp, CFG_STYPE_ALTER_SERVER_CMD, true));
+      if (pItemTmp == NULL) {
+        return TSDB_CODE_CFG_NOT_FOUND;
+      }
+
+      dInfo("change syncTimeout, GetAndSetItem, option:%s, value:%s, tsSyncTimeout:%d", cfgReq.config, cfgReq.value,
+            tsSyncTimeout);
+    }
+  }
+
   if (!isConifgItemLazyMode(pItem)) {
     TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, cfgReq.config, true));
+
+    if (taosStrncasecmp(cfgReq.config, "syncTimeout", 128) == 0) {
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "arbSetAssignedTimeoutMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "arbHeartBeatIntervalMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "arbCheckSyncIntervalMs", true));
+
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "syncVnodeElectIntervalMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "syncMnodeElectIntervalMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "syncVnodeHeartbeatIntervalMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "syncMnodeHeartbeatIntervalMs", true));
+      
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "statusTimeoutMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "statusSRTimeoutMs", true));
+      TAOS_CHECK_RETURN(taosCfgDynamicOptions(pCfg, "statusIntervalMs", true));
+
+      dInfo("change syncTimeout, DynamicOptions, option:%s, value:%s, tsSyncTimeout:%d", cfgReq.config, cfgReq.value,
+            tsSyncTimeout);
+    }
   }
 
   if (pItem->category == CFG_CATEGORY_GLOBAL) {
@@ -530,6 +618,23 @@ int32_t dmProcessConfigReq(SDnodeMgmt *pMgmt, SRpcMsg *pMsg) {
       dError("failed to persist local config since %s", tstrerror(code));
     }
   }
+
+  if (taosStrncasecmp(cfgReq.config, "syncTimeout", 128) == 0) {
+    dInfo(
+        "finished change syncTimeout, option:%s, value:%s", cfgReq.config, cfgReq.value);
+
+    (*pMgmt->setMnodeSyncTimeoutFp)();
+    (*pMgmt->setVnodeSyncTimeoutFp)();
+  }
+
+  if (taosStrncasecmp(cfgReq.config, "syncVnodeElectIntervalMs", 128) == 0 || taosStrncasecmp(cfgReq.config, "syncVnodeHeartbeatIntervalMs", 128) == 0) {
+    (*pMgmt->setVnodeSyncTimeoutFp)();
+  }
+
+  if (taosStrncasecmp(cfgReq.config, "syncMnodeElectIntervalMs", 128) == 0 || taosStrncasecmp(cfgReq.config, "syncMnodeHeartbeatIntervalMs", 128) == 0) {
+    (*pMgmt->setMnodeSyncTimeoutFp)();
+  }
+
   if (cfgReq.version > 0) {
     tsdmConfigVersion = cfgReq.version;
   }
@@ -762,6 +867,34 @@ int32_t dmProcessRetrieve(SDnodeMgmt *pMgmt, SRpcMsg *pMsg) {
   return TSDB_CODE_SUCCESS;
 }
 
+int32_t dmProcessStreamHbRsp(SDnodeMgmt *pMgmt, SRpcMsg *pMsg) {
+  SMStreamHbRspMsg rsp = {0};
+  int32_t          code = 0;
+  SDecoder         decoder;
+  char*            msg = POINTER_SHIFT(pMsg->pCont, sizeof(SStreamMsgGrpHeader));
+  int32_t          len = pMsg->contLen - sizeof(SStreamMsgGrpHeader);
+  int64_t          currTs = taosGetTimestampMs();
+
+  if (pMsg->code) {
+    return streamHbHandleRspErr(pMsg->code, currTs);
+  }
+
+  tDecoderInit(&decoder, (uint8_t*)msg, len);
+  code = tDecodeStreamHbRsp(&decoder, &rsp);
+  if (code < 0) {
+    code = TSDB_CODE_INVALID_MSG;
+    tDeepFreeSMStreamHbRspMsg(&rsp);
+    tDecoderClear(&decoder);
+    dError("fail to decode stream hb rsp msg, error:%s", tstrerror(code));
+    return streamHbHandleRspErr(code, currTs);
+  }
+
+  tDecoderClear(&decoder);
+
+  return streamHbProcessRspMsg(&rsp);
+}
+
+
 SArray *dmGetMsgHandles() {
   int32_t code = -1;
   SArray *pArray = taosArrayInit(16, sizeof(SMgmtHandle));
@@ -775,12 +908,16 @@ SArray *dmGetMsgHandles() {
   if (dmSetMgmtHandle(pArray, TDMT_DND_CREATE_QNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_DROP_QNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_CREATE_SNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
+  if (dmSetMgmtHandle(pArray, TDMT_DND_ALTER_SNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_DROP_SNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
+  if (dmSetMgmtHandle(pArray, TDMT_DND_CREATE_BNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
+  if (dmSetMgmtHandle(pArray, TDMT_DND_DROP_BNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_CONFIG_DNODE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_SERVER_STATUS, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_SYSTABLE_RETRIEVE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_ALTER_MNODE_TYPE, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
   if (dmSetMgmtHandle(pArray, TDMT_DND_CREATE_ENCRYPT_KEY, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
+  if (dmSetMgmtHandle(pArray, TDMT_MND_STREAM_HEARTBEAT_RSP, dmPutMsgToStreamMgmtQueue, 0) == NULL) goto _OVER;
 
   // Requests handled by MNODE
   if (dmSetMgmtHandle(pArray, TDMT_MND_GRANT, dmPutNodeMsgToMgmtQueue, 0) == NULL) goto _OVER;
